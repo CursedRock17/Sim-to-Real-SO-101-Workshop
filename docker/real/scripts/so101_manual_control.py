@@ -45,8 +45,8 @@ except ImportError:
     print("Error: pynput library not found. Install with: pip install pynput")
     sys.exit(1)
 
-from lerobot.robots.so101_follower import SO101Follower as SOFollower
-from lerobot.robots.so101_follower import SO101FollowerConfig as SOFollowerRobotConfig
+from lerobot.robots.so_follower import SO101Follower as SOFollower
+from lerobot.robots.so_follower import SO101FollowerConfig as SOFollowerRobotConfig
 
 
 class ManualJointController:

@@ -51,14 +51,13 @@ from gr00t.policy.server_client import PolicyClient
 
 # Importing various robot configs ensures CLI autocompletion works
 from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig  # noqa: F401
-from lerobot.robots import (  # noqa: F401
+from lerobot.robots import (
     Robot,
     RobotConfig,
-    koch_follower,
     make_robot_from_config,
-    so100_follower,
-    so101_follower,
 )
+import lerobot.robots.koch_follower  # noqa: F401
+import lerobot.robots.so_follower  # noqa: F401
 from lerobot.utils.utils import init_logging, log_say
 import numpy as np
 

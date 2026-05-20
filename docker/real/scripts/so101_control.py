@@ -24,15 +24,14 @@ from typing import Any, Dict
 from pprint import pformat
 from dataclasses import asdict, dataclass
 from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig  # noqa: F401
-from lerobot.robots import (  # noqa: F401
+from lerobot.robots import (
     Robot,
     RobotConfig,
-    koch_follower,
     make_robot_from_config,
-    so100_follower,
-    so101_follower,
 )
-from lerobot.robots.so101_follower import SO101FollowerConfig
+import lerobot.robots.koch_follower  # noqa: F401
+import lerobot.robots.so_follower  # noqa: F401
+from lerobot.robots.so_follower import SO101FollowerConfig
 from lerobot.utils.utils import init_logging
 import rerun as rr
 

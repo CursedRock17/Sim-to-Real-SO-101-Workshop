@@ -40,7 +40,7 @@ from pathlib import Path
 import draccus
 from lerobot.motors.motors_bus import MotorCalibration
 from lerobot.robots import make_robot_from_config
-from lerobot.robots.so101_follower import SO101FollowerConfig
+from lerobot.robots.so_follower import SO101FollowerConfig
 from lerobot.utils.constants import HF_LEROBOT_CALIBRATION
 from lerobot.utils.utils import init_logging
 
