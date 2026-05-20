@@ -1,6 +1,6 @@
 FROM nvcr.io/nvidia/isaac-lab:3.0.0-beta1
 
-ARG LEROBOT_REF=v0.5.1
+ARG LEROBOT_REF=d656da8ccca5989ff0a2207e81fbfa2c2d5bafb1
 
 ENV OMNI_KIT_ACCEPT_EULA=YES
 ENV PYTHON=/workspace/isaaclab/_isaac_sim/python.sh
