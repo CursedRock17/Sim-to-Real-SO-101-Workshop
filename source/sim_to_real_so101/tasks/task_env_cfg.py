@@ -109,8 +109,10 @@ class SO101TaskSceneCfg(LerobotSo101BaseSceneCfg):
     camera_ego.offset.rot = euler_angles_to_quat(np.array([-45, 0, 0]), degrees=True)
 
     camera_external_D455 = camera_object.replace()
-    camera_external_D455.prim_path = "{ENV_REGEX_NS}/LightStudio/LightBox/camera_mount/rsd455/RSD455/Camera_OmniVision_OV9782_Right"
-    camera_external_D455.spawn = None
+    # Spawn a camera prim as a child of camera_mount rather than relying on a
+    # specific prim embedded inside the lightbox USD (which may not be present
+    # on all platforms / git-lfs configurations).
+    camera_external_D455.prim_path = "{ENV_REGEX_NS}/LightStudio/LightBox/camera_mount/ExternalCamera"
 
 
 @configclass

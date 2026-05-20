@@ -53,7 +53,7 @@ RUN $PYTHON -m pip install -c /tmp/constraints.txt \
     "feetech-servo-sdk>=1.0.0,<2.0.0" \
     "rerun-sdk>=0.24.0,<0.27.0" \
     "pyzmq>=26.2.1,<28.0.0" \
-    "torchcodec>=0.10.0,<0.11.0" \
+    #"torchcodec>=0.10.0,<0.11.0" \
     "cmake>=3.29.0.1,<4.2.0"
 
 RUN curl --proto "=https" --tlsv1.2 -sSf -L -o /tmp/ffmpeg.tar.xz \

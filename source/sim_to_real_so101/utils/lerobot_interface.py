@@ -30,9 +30,9 @@ from lerobot.datasets.pipeline_features import (
     aggregate_pipeline_dataset_features,
     create_initial_features,
 )
-from lerobot.datasets.feature_utils import build_dataset_frame, combine_feature_dicts
+from lerobot.utils.feature_utils import build_dataset_frame, combine_feature_dicts
 from lerobot.utils.constants import OBS_STR
-from lerobot.utils.control_utils import predict_action
+from lerobot.common.control_utils import predict_action
 from lerobot.utils.device_utils import get_safe_torch_device
 from lerobot.policies.utils import make_robot_action
 from lerobot.utils.visualization_utils import init_rerun, log_rerun_data

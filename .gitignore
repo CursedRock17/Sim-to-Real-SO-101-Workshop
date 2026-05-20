@@ -262,3 +262,5 @@ tests/
 real_robot/core
 
 docker/env
+
+lerobot
