@@ -9,20 +9,21 @@ RUN git clone https://github.com/huggingface/lerobot.git
 WORKDIR /workspace/lerobot
 RUN git checkout e670ac5daf9b76
 
-# Install lerobot without deps to avoid upgrading packages that break
-# Isaac Lab's symlinked vendored copies (packaging, numpy, torch, etc.)
-RUN $PYTHON -m pip install --no-deps -e .
-
 # Pin packages already in the base image to prevent upgrades that break
 # Isaac Lab's internal symlinks (packaging, numpy, lxml, torch, etc.)
 RUN printf '%s\n' \
     "packaging==23.0" \
     "numpy==1.26.0" \
     "lxml==4.9.4" \
-    "torch==2.7.0" \
-    "torchvision==0.22.0" \
+    #"torch==2.7.0" \
+    #"torchvision==0.22.0" \
     "imageio==2.37.0" \
     > /tmp/constraints.txt
+
+# Install lerobot without deps to avoid upgrading packages that break
+# Isaac Lab's symlinked vendored copies (packaging, numpy, torch, etc.)
+RUN $PYTHON -m pip install --no-deps -e .
+
 
 # Install only the deps not already in the base image
 RUN $PYTHON -m pip install -c /tmp/constraints.txt \
