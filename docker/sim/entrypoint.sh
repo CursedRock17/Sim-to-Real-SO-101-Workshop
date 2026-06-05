@@ -9,6 +9,10 @@ export EXP_PATH=$ISAAC_SIM/apps
 source ${ISAAC_SIM}/setup_python_env.sh
 source /root/env 2>/dev/null
 
+export CUDA_HOME=/usr/local/cuda
+export PATH=$CUDA_HOME/bin:$PATH
+export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+
 cat > /usr/local/bin/python << 'WRAPPER'
 #!/bin/bash
 exec /workspace/isaaclab/_isaac_sim/python.sh "$@"

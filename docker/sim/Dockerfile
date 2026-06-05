@@ -5,13 +5,16 @@ ENV PATH="/workspace/isaaclab/_isaac_sim/kit/python/bin:$PATH"
 
 
 WORKDIR /workspace
+RUN rm -rf /workspace/lerobot_attention_visualizer
 RUN git clone https://github.com/huggingface/lerobot.git
+RUN git clone https://github.com/CursedRock17/lerobot_attention_visualizer.git
+
+WORKDIR /workspace/lerobot_attention_visualizer
+RUN git checkout so101_nvidia
+RUN $PYTHON -m pip install --no-deps -e '.[smolvla]'
+
 WORKDIR /workspace/lerobot
 RUN git checkout e670ac5daf9b76
-
-# Install lerobot without deps to avoid upgrading packages that break
-# Isaac Lab's symlinked vendored copies (packaging, numpy, torch, etc.)
-RUN $PYTHON -m pip install --no-deps -e .
 
 # Pin packages already in the base image to prevent upgrades that break
 # Isaac Lab's internal symlinks (packaging, numpy, lxml, torch, etc.)
@@ -19,10 +22,12 @@ RUN printf '%s\n' \
     "packaging==23.0" \
     "numpy==1.26.0" \
     "lxml==4.9.4" \
-    "torch==2.7.0" \
-    "torchvision==0.22.0" \
     "imageio==2.37.0" \
     > /tmp/constraints.txt
+
+# Install lerobot without deps to avoid upgrading packages that break
+# Isaac Lab's symlinked vendored copies (packaging, numpy, torch, etc.)
+RUN $PYTHON -m pip install --no-deps -e .
 
 # Install only the deps not already in the base image
 RUN $PYTHON -m pip install -c /tmp/constraints.txt \
@@ -36,7 +41,7 @@ RUN $PYTHON -m pip install -c /tmp/constraints.txt \
     "pynput>=1.7.7,<1.9.0" \
     "pyserial>=3.5,<4.0" \
     "wandb>=0.20.0,<0.22.0" \
-    "torchcodec>=0.2.1,<0.6.0" \
+    #"torchcodec>=0.2.1,<0.6.0" \
     "draccus==0.10.0" \
     "deepdiff>=7.0.1,<9.0.0" \
     "feetech-servo-sdk>=1.0.0,<2.0.0"
@@ -49,7 +54,7 @@ RUN curl --proto "=https" --tlsv1.2 -sSf -L -o /tmp/ffmpeg.tar.xz \
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libx11-6 libxcursor1 libxrandr2 libxi6 libxinerama1 \
-    libxkbcommon0 libxkbcommon-x11-0 \
+    libxkbcommon0 libxkbcommon-x11-0 neovim \
     && rm -rf /var/lib/apt/lists/*
 
 # rerun-sdk requires numpy>=2 in its metadata but works fine with 1.26.0
