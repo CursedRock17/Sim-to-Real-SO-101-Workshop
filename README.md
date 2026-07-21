@@ -1,22 +1,12 @@
 # Train an SO-101 Robot From Sim-to-Real With NVIDIA Isaac
 
-![SO-101 Vial to Rack Task](images/so101_banner.png)
-
-Welcome to this workshop on sim-to-real transfer for the SO-101 robot!
-
-This repository contains the assets and code to accompany this [learning content](https://docs.nvidia.com/learning/physical-ai/sim-to-real-so-101/latest/index.html).
-
-The rest of this README will help you setup the environment and ensure everything is installed correctly.
-
-You can also use this repo as a basis for trying out your own tasks.
+This is an offshoot of the original SO-101 Training in Isaac Sim Workshop fit with custom environments for naval research.
 
 ## Requirements
 
-This content was tested on the following GPUs:
+This runs on the following GPUs:
 
-- NVIDIA RTX 6000 Pro (Blackwell)
-- NVIDIA RTX 5090 (Blackwell)
-- NVIDIA RTX 6000 (Ada)
+- DGX Spark, GB10 (Blackwell)
 
 OS and Software tested:
 - Ubuntu Linux >22.04
@@ -29,16 +19,16 @@ OS and Software tested:
 
 1. Create directory and clone this repo
 ```bash
-mkdir ~/sim2real
-cd ~/sim2real
-git clone https://github.com/isaac-sim/Sim-to-Real-SO-101-Workshop.git
+mkdir ~/Documents
+cd ~/Documents
+git clone https://github.com/CursedRock17/Sim-to-Real-SO-101-Workshop -b naval_research
 ```
 
 ### Building the Docker images
 
 2. Navigate to the repo
 ```bash
-cd ~/sim2real/Sim-to-Real-SO-101-Workshop
+cd ~/Documents/Sim-to-Real-SO-101-Workshop
 ```
 
 #### Teleop & Simulation container
@@ -57,24 +47,21 @@ For **Blackwell** architecture GPUs:
 ```bash
 ./docker/real/build.sh blackwell
 ```
-For **Ada** architecture GPUs:
-
-4. From the repo root directory:
-```bash
-./docker/real/build.sh ada
-```
-
-5. Continue with the course instructions [here](https://docs.nvidia.com/learning/physical-ai/sim-to-real-so-101/latest/index.html).
 
 ### Starting the images
 
-To start the Teleop & Simulation container:
+To start the Teleop & Simulation container, run [./helper_scripts/sim_basic.sh](./helper_scripts/sim_basic.sh)
+or:
 
 ```bash
 xhost + 
-docker run --name teleop -it --privileged --gpus all -e "ACCEPT_EULA=Y" --rm --network=host \
-   -e "PRIVACY_CONSENT=Y" \
-   -e DISPLAY \
+docker run --name teleop \
+   -it --privileged --gpus all --rm --network=host \
+   -e ACCEPT_EULA=Y \
+   -e PRIVACY_CONSENT=Y \
+   -e DISPLAY=$DISPLAY \
+   -e NVIDIA_DRIVER_CAPABILITIES=all \
+   -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
    -v /dev:/dev \
    -v /run/udev:/run/udev:ro \
    -v $HOME/.Xauthority:/root/.Xauthority \
@@ -94,9 +81,11 @@ docker run --name teleop -it --privileged --gpus all -e "ACCEPT_EULA=Y" --rm --n
    teleop-docker:latest
 ```
 
-To start the Real Robot & Inference Server:
+To start the Real Robot & Inference Server run [./helper_scripts/real_basic.sh](./helper_scripts/real_basic.sh)
+or:
 
 ```bash
+xhost +
 docker run -it --rm --name real-robot --network host --privileged --gpus all \
     -e DISPLAY \
     -v /dev:/dev \
@@ -104,9 +93,9 @@ docker run -it --rm --name real-robot --network host --privileged --gpus all \
     -v $HOME/.Xauthority:/root/.Xauthority \
     -v /tmp/.X11-unix:/tmp/.X11-unix \
     -v ~/.cache/huggingface/lerobot/calibration:/root/.cache/huggingface/lerobot/calibration \
-    -v ./docker/env:/root/env \
-    -v ~/sim2real/models:/workspace/models \
-    -v $(pwd)/docker/real/scripts:/workspace/Isaac-GR00T/gr00t/eval/real_robot/SO100 \
+    -v ~/Documents/Sim-to-Real-SO-101-Workshop/models:/workspace/models \
+    -v ~/Documents/Sim-to-Real-SO-101-Workshop/docker/env:/root/env \
+    -v ~/Documents/Sim-to-Real-SO-101-Workshop/docker/real/scripts:/Isaac-GR00T/gr00t/eval/real_robot/SO100 \
     real-robot \
     /bin/bash
 ```
@@ -117,11 +106,8 @@ docker run -it --rm --name real-robot --network host --privileged --gpus all \
 
 First, [install the HuggingFace command-line-interface (CLI)](https://huggingface.co/docs/huggingface_hub/en/guides/cli#command-line-interface-cli)
 
-The models used in the course are listed in the course instructions [here](https://docs.nvidia.com/learning/physical-ai/sim-to-real-so-101/latest/datasets-and-models.html).
-
-You can either download them ahead of time, or as you get to them in the course.
-
 ## Tasks
+TODO: Add in our tasks
 
 ### Tasks
 
@@ -146,6 +132,3 @@ You can either download them ahead of time, or as you get to them in the course.
 - `lerobot_agent` - LeRobot SO101 teleop script
 - `lerobot_eval` - Model evaluation script
 - `lerobot_push_dataset` - LeRobot Dataset push to hub script
-
-## Contributions
-We are not currently accepting contributions for this project.

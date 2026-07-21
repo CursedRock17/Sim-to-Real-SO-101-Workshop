@@ -35,6 +35,16 @@ import_packages(__name__, _BLACKLIST_PKGS)
 
 import gymnasium as gym
 
+## Custom Gymnasium Environments for the Naval Research Tasks
+gym.register(
+    id="Simple-Table-Scene",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.so101_env_cfg:SimpleSceneEnvCfg",
+    },
+)
+
 
 ##
 # Register Gym environments.
