@@ -35,17 +35,6 @@ import_packages(__name__, _BLACKLIST_PKGS)
 
 import gymnasium as gym
 
-## Custom Gymnasium Environments for the Naval Research Tasks
-gym.register(
-    id="Simple-Table-Scene",
-    entry_point="isaaclab.envs:ManagerBasedRLEnv",
-    disable_env_checker=True,
-    kwargs={
-        "env_cfg_entry_point": f"{__name__}.so101_env_cfg:SimpleSceneEnvCfg",
-    },
-)
-
-
 ##
 # Register Gym environments.
 ##
@@ -68,30 +57,11 @@ gym.register(
 )
 
 gym.register(
-    id="Lerobot-So101-Teleop-Vials-To-Rack",
-    entry_point="isaaclab.envs:ManagerBasedRLEnv",
-    disable_env_checker=True,
-    kwargs={
-        "env_cfg_entry_point": f"{__name__}.vials_to_rack_env_cfg:VialsToRackEnvCfg",
-    },
-)
-
-gym.register(
     id="Lerobot-So101-Teleop-Vials-To-Rack-DR",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": f"{__name__}.vials_to_rack_env_cfg:VialsToRackDREnvCfg",
-    },
-)
-
-
-gym.register(
-    id="Lerobot-So101-Teleop-Vials-To-Rack-Eval",
-    entry_point="isaaclab.envs:ManagerBasedRLEnv",
-    disable_env_checker=True,
-    kwargs={
-        "env_cfg_entry_point": f"{__name__}.vials_to_rack_env_cfg:VialsToRackEvalEnvCfg",
     },
 )
 
@@ -105,3 +75,21 @@ gym.register(
     },
 )
 
+## Custom Gymnasium Environments for the Naval Research Tasks
+gym.register(
+    id="Simple-Table-Scene",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.simple_scene_env_cfg:SimpleSceneEnvCfg",
+    },
+)
+
+gym.register(
+    id="Lerobot-So101-Teleop-Table-Task",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.table_env_cfg:SO101TableTaskEnvCfg",
+    },
+)

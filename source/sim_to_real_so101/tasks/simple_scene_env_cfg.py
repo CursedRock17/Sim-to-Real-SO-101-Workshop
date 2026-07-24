@@ -13,20 +13,55 @@ from isaaclab.assets import ArticulationCfg
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.utils import configclass
 
+# Load in our OpenUSD Assets from the top of our package
+from sim_to_real_so101 import assets
 assets_path = os.path.dirname(os.path.abspath(assets.__file__))
+
+# Create our Initailization Base Class
+@configclass
+class BaseSceneCfg(InteractiveSceneCfg):
+    # Basic Scene Info
+    env_spacing = 4.0
+    num_envs = 1
+
+# Create our Basic Actions Class
+@configclass
+class ActionsCfg:
+    # Basic Actions
+    # TODO: define real action terms here. The previous placeholder instantiated
+    # the abstract ActionTerm() at import time, which crashed import_packages()
+    # and took down the entire tasks package.
+    pass
+
+# Create our Basic Observations Class
+@configclass
+class ObservationsCfg:
+    # Basic Obs
+    policy = 1
 
 # Create our Configuration Class for a Simple Scene
 @configclass
 class SimpleSceneEnvCfg(ManagerBasedRLEnvCfg):
-    # simulation configuration
+    # Scene configuration - required
+    scene: BaseSceneCfg = BaseSceneCfg()
 
-    # scene configuration
+    # Simulation configuration - requires both
+    observations: ObservationsCfg = ObservationsCfg()
+    actions: ActionsCfg = ActionsCfg()
 
-    # reset configuration
+    # Reset configuration - requires both
+    rewards = None  # No rewards for teleoperation
+    terminations = None  # No terminations for teleoperation
 
     def __post_init__(self) -> None:
         """Post initialization."""
         super().__post_init__()
+
+        # General Settings
+        self.decimation = 2
+        self.episode_length_s = 5
+
+        self.scene.num_envs = 1  # Always 1 env for teleoperation
 
         self.sim.render.enable_translucency = True
         carb_settings = {
