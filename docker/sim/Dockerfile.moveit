@@ -1,0 +1,44 @@
+# MoveIt2-enabled variant of the teleop sim image.
+#
+# Adds ROS 2 Jazzy + MoveIt2 on top of the base teleop image for the
+# `classic_planner` pipeline: MoveIt2 plans perfect pick-place trajectories from
+# ground-truth sim state to auto-generate LeRobot demonstration datasets.
+#
+# Build (from repo root, after building teleop-docker):
+#   docker build -t teleop-moveit -f docker/sim/Dockerfile.moveit .
+#
+# NOTE ON PYTHON: the base image's PATH resolves `python`/`python3` to Isaac's
+# interpreter (3.11). ROS 2 Jazzy runs under system Python 3.12. They must stay
+# on opposite sides of a process boundary -- do NOT source ROS globally, or its
+# setup.bash will shadow Isaac's interpreter/paths and break the sim. Use the
+# `source-ros` alias to bring ROS up in a dedicated shell only.
+FROM teleop-docker:latest
+
+# Ubuntu 24.04 (noble) / arm64 -> ROS 2 Jazzy is the apt-native distro.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        curl gnupg lsb-release \
+    && curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
+        -o /usr/share/keyrings/ros-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu noble main" \
+        > /etc/apt/sources.list.d/ros2.list \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        ros-jazzy-ros-base \
+        ros-jazzy-moveit \
+        ros-jazzy-moveit-py \
+        ros-jazzy-ros2-control \
+        ros-jazzy-ros2-controllers \
+        ros-jazzy-xacro \
+        ros-jazzy-rviz2 \
+        ros-dev-tools \
+    && rm -rf /var/lib/apt/lists/*
+
+# Initialize rosdep (best-effort; needs network, non-fatal if it hiccups).
+RUN rosdep init 2>/dev/null || true
+
+# `source-ros` brings up Jazzy in the CURRENT shell only (keeps Isaac's default
+# env clean). It also puts system Python 3.12 first on PATH so `python3` in a ROS
+# shell imports MoveIt (Isaac's 3.11 cannot). FastRTPS matches Isaac Sim's bridge
+# DDS for interop.
+RUN printf '%s\n' \
+    "alias source-ros='source /opt/ros/jazzy/setup.bash && export RMW_IMPLEMENTATION=rmw_fastrtps_cpp && export PATH=/usr/bin:\$PATH && unalias python python3 2>/dev/null'" \
+    >> /root/.bashrc
