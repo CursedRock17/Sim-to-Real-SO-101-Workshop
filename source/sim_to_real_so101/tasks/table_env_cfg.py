@@ -138,16 +138,19 @@ class SO101TableTaskSceneCfg(SO101TaskSceneCfg):
     )
 
     # Colored rigid blocks. Colors are applied in-sim via a bound preview surface.
+    # Spawn positions sit inside the top-down-reachable zone (reach_zone.py:
+    # ENV x[0.034,0.194], y[-0.139,0.181]); with the +/-0.03 reset randomization
+    # every sampled pose stays graspable.
     block_red = block_base.replace()
     block_red.prim_path = "{ENV_REGEX_NS}/Block_Red"
-    block_red.init_state.pos = (0.22, -0.06, SURFACE_Z)
+    block_red.init_state.pos = (0.16, 0.06, SURFACE_Z)
     block_red.spawn.visual_material = sim_utils.PreviewSurfaceCfg(
         diffuse_color=BLOCK_COLORS["red"]
     )
 
     block_blue = block_base.replace()
     block_blue.prim_path = "{ENV_REGEX_NS}/Block_Blue"
-    block_blue.init_state.pos = (0.22, -0.12, SURFACE_Z)
+    block_blue.init_state.pos = (0.16, -0.06, SURFACE_Z)
     block_blue.spawn.visual_material = sim_utils.PreviewSurfaceCfg(
         diffuse_color=BLOCK_COLORS["blue"]
     )

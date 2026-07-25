@@ -18,9 +18,11 @@ from moveit.core.robot_state import RobotState
 
 import so101_planning as sp
 
-# Actual scene object positions in the ENV frame (from table_env_cfg.py).
-SCENE_BLOCK_ENV = (0.22, -0.06, 0.05)
-SCENE_BOX_ENV = (0.20, 0.12, 0.05)
+# Actual scene object positions in the ENV frame (mirrors table_env_cfg.py; in the
+# record loop these will come live from Isaac per-episode). ENV->base uses the
+# CALIBRATED transform in so101_planning (translation-only).
+SCENE_BLOCK_ENV = (0.16, 0.06, 0.05)   # block_red init
+SCENE_BOX_ENV = (0.10, 0.20, 0.06)     # cardboard box (place near the box floor)
 
 # Known-reachable base-frame fallbacks (from the plan_grasp reachability scan).
 BLOCK_FALLBACK = (0.15, -0.05, 0.03)
