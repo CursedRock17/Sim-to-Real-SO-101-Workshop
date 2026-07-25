@@ -1,0 +1,6 @@
+# usd-convert-cad conversion byproducts (scratch extraction dirs + JSON reports)
+box/
+_conversion/
+CardboardBox-*.json
+Block-*.json
+Table-*.json

@@ -45,6 +45,7 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils import configclass
 from isaaclab.assets import RigidObjectCfg, AssetBaseCfg
 from isaaclab.envs.mdp import reset_root_state_uniform
+from isaacsim.core.utils.rotations import euler_angles_to_quat
 
 from sim_to_real_so101 import assets
 from sim_to_real_so101.mdp import randomize_robot_color, ROBOT_COLORS
@@ -64,9 +65,18 @@ assets_path = os.path.dirname(os.path.abspath(assets.__file__))
 # (mat) at ~z=0.03, objects rest at ~z=0.05 (see vials_to_rack_env_cfg.py).
 # --------------------------------------------------------------------------- #
 SURFACE_Z = 0.05  # spawn height for objects resting on the working surface
-TABLE_POS = (0.1, 0.0, 0.0)  # visual table; tune so its top meets the surface
-BOX_POS = (0.20, 0.12, SURFACE_Z)  # cardboard box drop target (stable)
+# The CAD USDs are authored in millimeters; Isaac references them into a meters
+# stage without applying metersPerUnit, so raw they spawn 1000x too big (the table
+# was ~1 km wide). CAD_MM_TO_M rescales them to real size.
+CAD_MM_TO_M = (0.001, 0.001, 0.001)
+TABLE_POS = (0.1, 0.0, -0.025)  # tabletop ~ground level so arm/lightbox sit on it
+# Box CENTER position. The mesh origin was recentered in CardboardBox.usd, so
+# rotations pivot in place and this is the true geometric center (not a corner).
+# z=0.091 puts the box bottom on the mat for the current rotation.
+BOX_POS = (0.10, 0.20, 0.091)
 BLOCK_SIZE = (0.022, 0.022, 0.05)  # rectangular block (m); tune to the CAD block
+
+BOX_COLOR = (0.757, 0.604, 0.424)  # cardboard tan (from the CAD/STEP material)
 
 # Block colors applied in Isaac Sim (matches the red/blue blocks in the notes).
 BLOCK_COLORS = {
@@ -96,24 +106,35 @@ class SO101TableTaskSceneCfg(SO101TaskSceneCfg):
     # so the table is a visual backdrop and won't fight the established physics.
     table = AssetBaseCfg(
         prim_path="{ENV_REGEX_NS}/Table",
-        spawn=sim_utils.UsdFileCfg(usd_path=f"{assets_path}/usd/table.usd"),
+        spawn=sim_utils.UsdFileCfg(
+            usd_path=f"{assets_path}/usd/table.usd",
+            scale=CAD_MM_TO_M,
+        ),
         init_state=AssetBaseCfg.InitialStateCfg(pos=TABLE_POS),
     )
 
-    # Static cardboard box -- the stable drop target.
-    # KNOWN LIMITATION: CardboardBox.usd is an *instanceable* prim, so Isaac Lab
-    # skips the runtime collision API below (logs "Could not perform
-    # 'modify_collision_properties'") and the box currently has NO collider --
-    # blocks pass through it and rest on the surface at the box footprint. To get
-    # real containment, bake a collider into the asset (re-convert / author a
-    # collision mesh) or mark the prim non-instanceable, then this cfg applies.
+    # Static cardboard box -- the stable drop target. Converted from the STEP
+    # file, which is authored in METERS (metersPerUnit=1.0), so unlike the table
+    # it needs NO scale override. It is non-instanceable, renders its CAD
+    # cardboard-brown material, and has a concave triangle-mesh collider
+    # (UsdPhysics MeshCollisionAPI, approximation="none") baked in so the open top
+    # is preserved -- blocks can be placed INSIDE and are contained by the walls/
+    # floor. `collision_props` below enables that baked collider.
     cardboard_box = AssetBaseCfg(
         prim_path="{ENV_REGEX_NS}/CardboardBox",
         spawn=sim_utils.UsdFileCfg(
             usd_path=f"{assets_path}/usd/CardboardBox.usd",
+            # The CAD-imported material doesn't render in Isaac; author the tan
+            # here (the same known-good path the blocks use).
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=BOX_COLOR),
             collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
         ),
-        init_state=AssetBaseCfg.InitialStateCfg(pos=BOX_POS),
+        # Rotate so the open top faces up (roll/pitch/yaw about world X/Y/Z, deg).
+        # Origin is recentered, so this pivots about the box center.
+        init_state=AssetBaseCfg.InitialStateCfg(
+            pos=BOX_POS,
+            rot=euler_angles_to_quat(np.array([-90, 180, 90]), degrees=True),
+        ),
     )
 
     # Colored rigid blocks. Colors are applied in-sim via a bound preview surface.
