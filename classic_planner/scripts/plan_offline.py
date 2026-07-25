@@ -21,9 +21,10 @@ OUT = os.environ.get("CALIB_DIR", "/root/smoke") + "/trajectory.json"
 ISAAC_ORDER = ["Rotation", "Pitch", "Elbow", "Wrist_Pitch", "Wrist_Roll", "Jaw"]
 URDF2ISAAC = {"shoulder_pan": 0, "shoulder_lift": 1, "elbow_flex": 2, "wrist_flex": 3, "wrist_roll": 4}
 
-# Gripper (Jaw) command values -- TUNE from the sim grasp.
-JAW_OPEN = 0.6
-JAW_CLOSE = -0.15
+# Gripper (Jaw) command values (tuned from the sim grip search). JAW_OPEN is wide
+# so the fingers clear the block on descent; JAW_CLOSE clamps it.
+JAW_OPEN = 1.5
+JAW_CLOSE = -0.5
 
 SCENE_BLOCK_ENV = (0.16, 0.06, 0.05)
 SCENE_BOX_ENV = (0.10, 0.20, 0.06)
@@ -60,16 +61,24 @@ def main():
     model = moveit.get_robot_model()
     arm = moveit.get_planning_component(sp.ARM)
 
-    block = tuple(sp.env_to_base(SCENE_BLOCK_ENV))
+    # gripper_frame_link is a tool frame past the fingertips, so drive the grasp
+    # target GRASP_DZ below the block so the actual fingers reach it.
+    GRASP_DZ = -0.03
+    bx, by, bz = sp.env_to_base(SCENE_BLOCK_ENV)
+    block = (bx, by, bz + GRASP_DZ)
     place = tuple(sp.env_to_base(SCENE_BOX_ENV))
     grasp = sp.find_grasp_ik(model, block)
-    pre = sp.find_grasp_ik(model, (block[0], block[1], block[2] + 0.05))
-    lift = sp.find_grasp_ik(model, (block[0], block[1], block[2] + 0.05))
     over = sp.find_grasp_ik(model, (place[0], place[1], place[2] + 0.05))
     place_s = sp.find_grasp_ik(model, place)
-    for nm, r in [("grasp", grasp), ("pre", pre), ("lift", lift), ("over", over), ("place", place_s)]:
+    for nm, r in [("grasp", grasp), ("over", over), ("place", place_s)]:
         if r is None:
             print("PLAN_FAILED: unreachable", nm); os._exit(2)
+    gq = grasp[2]  # grasp orientation, reused for the pre-grasp + vertical approach
+    # pre-grasp uses the SAME orientation as the grasp so the wrist doesn't snap at
+    # the descent start (which knocks the block).
+    pre = sp.ik_pose(model, (bx, by, bz + 0.05), gq)
+    if pre is None:
+        print("PLAN_FAILED: unreachable pre"); os._exit(2)
 
     def plan(start_joints, goal_state):
         s = RobotState(model); s.set_joint_group_positions(sp.ARM, start_joints); s.update()
@@ -80,21 +89,35 @@ def main():
             print("PLAN_FAILED"); os._exit(3)
         return r.trajectory, list(goal_state.get_joint_group_positions(sp.ARM))
 
+    def straight(x, y, z0, z1, quat, jaw, n=20):
+        """Vertical Cartesian move at fixed orientation -> 6-DOF frames (avoids the
+        OMPL lateral swing that knocks the block on approach)."""
+        frames, last = [], None
+        for h in np.linspace(z0, z1, n):
+            r = sp.ik_pose(model, (x, y, h), quat)
+            if r is None:
+                print("PLAN_FAILED: straight ik z=%.3f" % h); os._exit(4)
+            frames.append(list(r[1]) + [jaw]); last = r[1]
+        return frames, last
+
     rest = RobotState(model); rest.set_to_default_values(sp.ARM, "rest"); rest.update()
     j = list(rest.get_joint_group_positions(sp.ARM))
     traj = []
 
-    t1, j = plan(j, pre[0]);      traj += resample(t1, JAW_OPEN)
-    t2, j = plan(j, grasp[0]);    traj += resample(t2, JAW_OPEN)
-    traj += ramp_jaw(grasp[1], JAW_OPEN, JAW_CLOSE)          # close on block
-    t3, j = plan(j, lift[0]);     traj += resample(t3, JAW_CLOSE)
-    t4, j = plan(j, over[0]);     traj += resample(t4, JAW_CLOSE)
-    t5, j = plan(j, place_s[0]);  traj += resample(t5, JAW_CLOSE)
-    traj += ramp_jaw(place_s[1], JAW_CLOSE, JAW_OPEN)        # release
-    t6, j = plan(j, rest);        traj += resample(t6, JAW_OPEN)
+    t1, j = plan(j, pre[0]); traj += resample(t1, JAW_OPEN)                    # rest -> pre (free)
+    d, j = straight(bx, by, bz + 0.05, bz + GRASP_DZ, gq, JAW_OPEN); traj += d  # vertical descent
+    traj += ramp_jaw(j, JAW_OPEN, JAW_CLOSE)                                    # close on block
+    u, j = straight(bx, by, bz + GRASP_DZ, bz + 0.05, gq, JAW_CLOSE); traj += u # vertical lift
+    t4, j = plan(j, over[0]); traj += resample(t4, JAW_CLOSE)                   # transport (free)
+    t5, j = plan(j, place_s[0]); traj += resample(t5, JAW_CLOSE)               # over -> place
+    traj += ramp_jaw(place_s[1], JAW_CLOSE, JAW_OPEN)                           # release
+    t6, j = plan(j, rest); traj += resample(t6, JAW_OPEN)                       # retreat (free)
 
     out = {"fps": FPS, "joint_order": ISAAC_ORDER, "block_env": SCENE_BLOCK_ENV,
            "box_env": SCENE_BOX_ENV, "jaw_open": JAW_OPEN, "jaw_close": JAW_CLOSE,
+           "grasp_config": list(grasp[1]) + [JAW_OPEN],   # 6-DOF at the grasp pose
+           "lift_config": list(lift[1]) + [JAW_CLOSE],     # 6-DOF after lifting
+           "grasp_target_base": list(block),
            "trajectory": traj}
     json.dump(out, open(OUT, "w"))
     print(f"PLAN_OK frames={len(traj)} duration_s={len(traj)*DT:.2f} -> {OUT}")

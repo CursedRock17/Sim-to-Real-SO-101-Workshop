@@ -65,7 +65,13 @@ for i in range(N):
         obs, _, _, _, _ = env.step(actions)
     rec_action.append(traj[i].copy())
     rec_state.append(obs["policy"]["joint_pos_obs"][0].detach().cpu().numpy().copy())
-    block_z.append(float(block.data.root_pos_w[0, 2]))
+    bp_now = block.data.root_pos_w[0].tolist()
+    block_z.append(float(bp_now[2]))
+    if i == 0:
+        _b0 = np.array(bp_now[:2]); _knock = None
+    elif _knock is None and np.linalg.norm(np.array(bp_now[:2]) - _b0) > 0.015:
+        _knock = i
+        print(f"KNOCK at frame {i}/{N} (t={i/plan['fps']:.2f}s): block moved to ({bp_now[0]:.3f},{bp_now[1]:.3f})")
     if i in (0, N // 2, N - 1):
         img = cam(obs, "rgb_external_D455")
         img = (img*255).clip(0,255).astype(np.uint8) if img.max() <= 1.0 else img.clip(0,255).astype(np.uint8)

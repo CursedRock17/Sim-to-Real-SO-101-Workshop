@@ -72,19 +72,27 @@ def make_pose(xyz, quat):
     return p
 
 
+def ik_pose(model, xyz, quat):
+    """IK for a specific pose; returns (RobotState, joints) or None."""
+    rs = RobotState(model)
+    rs.set_to_default_values(ARM, "home")
+    rs.update()
+    if rs.set_from_ik(ARM, make_pose(xyz, quat), TIP, 0.1):
+        rs.update()
+        return rs, list(rs.get_joint_group_positions(ARM))
+    return None
+
+
 def find_grasp_ik(model, xyz):
     """Top-down grasp IK (approach = world -Z) with a yaw sweep for jaw alignment.
-    Returns (RobotState, joints) for the first solution, else None."""
+    Returns (RobotState, joints, quat) for the first solution, else None."""
     for flip_axis in ([1, 0, 0], [0, 1, 0]):
         base_down = q_axis_angle(flip_axis, math.pi)
         for yaw in np.linspace(-math.pi, math.pi, 9):
             quat = q_mul(q_axis_angle([0, 0, 1], yaw), base_down)
-            rs = RobotState(model)
-            rs.set_to_default_values(ARM, "home")
-            rs.update()
-            if rs.set_from_ik(ARM, make_pose(xyz, quat), TIP, 0.1):
-                rs.update()
-                return rs, list(rs.get_joint_group_positions(ARM))
+            r = ik_pose(model, xyz, quat)
+            if r is not None:
+                return r[0], r[1], quat
     return None
 
 
