@@ -1,11 +1,12 @@
 """Shared SO-101 MoveIt planning helpers: config, top-down grasp IK, frame transforms.
 
-Frame note: the Isaac scene expresses object poses in the ENV frame, while MoveIt
-plans in the arm's base_link frame. The arm root sits in the ENV frame at
-ARM_BASE_POS with a Z rotation of ARM_BASE_YAW (from assets/so101.py). env<->base
-below assumes the URDF base_link axes align with the USD Robot prim axes -- this
-alignment must be CALIBRATED against Isaac (drive a known joint config in sim,
-compare the gripper world pose to URDF FK) before trusting the transform.
+Frame transform (CALIBRATED against Isaac): objects are expressed in the ENV
+frame; MoveIt plans in the URDF base_link frame. An 8-config forward-kinematics
+calibration (URDF FK vs Isaac gripper world pose, rigid-fit residual 0.00 mm)
+showed the two frames are AXIS-ALIGNED -- the rotation is identity, NOT the 90 deg
+yaw one might infer from assets/so101.py. Only a translation separates them:
+base_link's origin sits at BASE_ORIGIN_ENV in the ENV frame. The same calibration
+confirmed the USD and upstream-URDF joint conventions match exactly.
 """
 import math
 import numpy as np
@@ -18,9 +19,8 @@ TIP = "gripper_frame_link"
 ARM = "arm"
 GRIPPER = "gripper"
 
-# Arm root in the Isaac ENV frame (assets/so101.py: pos=(-0.05,0,0), yaw=90deg).
-ARM_BASE_POS = np.array([-0.05, 0.0, 0.0])
-ARM_BASE_YAW = math.radians(90.0)
+# base_link origin expressed in the Isaac ENV frame (from FK calibration).
+BASE_ORIGIN_ENV = np.array([-0.0658, 0.0208, 0.0325])
 
 
 def build_config():
@@ -37,19 +37,13 @@ def build_config():
     )
 
 
-# ---- frame transforms (ENV <-> base_link), planar Z rotation ----------------
-def _rot_z(yaw, p):
-    c, s = math.cos(yaw), math.sin(yaw)
-    x, y, z = p
-    return np.array([c * x - s * y, s * x + c * y, z])
-
-
+# ---- frame transforms (ENV <-> base_link): calibrated as translation-only -----
 def env_to_base(p_env):
-    return _rot_z(-ARM_BASE_YAW, np.asarray(p_env, float) - ARM_BASE_POS)
+    return np.asarray(p_env, float) - BASE_ORIGIN_ENV
 
 
 def base_to_env(p_base):
-    return _rot_z(ARM_BASE_YAW, np.asarray(p_base, float)) + ARM_BASE_POS
+    return np.asarray(p_base, float) + BASE_ORIGIN_ENV
 
 
 # ---- quaternion helpers -----------------------------------------------------
