@@ -72,7 +72,7 @@ for i in range(N):
     elif _knock is None and np.linalg.norm(np.array(bp_now[:2]) - _b0) > 0.015:
         _knock = i
         print(f"KNOCK at frame {i}/{N} (t={i/plan['fps']:.2f}s): block moved to ({bp_now[0]:.3f},{bp_now[1]:.3f})")
-    if i in (0, N // 2, N - 1):
+    if i in (60, 68, 76, 84, 92, N - 1):
         img = cam(obs, "rgb_external_D455")
         img = (img*255).clip(0,255).astype(np.uint8) if img.max() <= 1.0 else img.clip(0,255).astype(np.uint8)
         imageio.imwrite(f"{S}/ep_{i}.png", img[..., :3]); frames_png[i] = f"ep_{i}.png"

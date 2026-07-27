@@ -65,6 +65,13 @@ def q_mul(a, b):
     ])
 
 
+def rotate_vec(q, v):
+    """Rotate vector v by quaternion q=(x,y,z,w)."""
+    qv = np.array(q[:3]); v = np.asarray(v, float)
+    t = 2.0 * np.cross(qv, v)
+    return v + q[3] * t + np.cross(qv, t)
+
+
 def make_pose(xyz, quat):
     p = Pose()
     p.position.x, p.position.y, p.position.z = [float(v) for v in xyz]
@@ -94,6 +101,33 @@ def find_grasp_ik(model, xyz):
             if r is not None:
                 return r[0], r[1], quat
     return None
+
+
+def side_grasp_quats(n_az=16, n_roll=8):
+    """Horizontal (side) grasp orientations: approach axis horizontal, swept in
+    azimuth (which way the gripper points) and roll (jaw alignment about approach).
+    Yields (quat, approach_dir_world). The tool approach is the frame's local +Z."""
+    base = q_axis_angle([0, 1, 0], math.pi / 2)  # local +Z -> world +X (horizontal)
+    for az in np.linspace(-math.pi, math.pi, n_az, endpoint=False):
+        q_dir = q_mul(q_axis_angle([0, 0, 1], az), base)
+        adir = rotate_vec(q_dir, [0.0, 0.0, 1.0])       # world approach direction
+        for roll in np.linspace(-math.pi, math.pi, n_roll, endpoint=False):
+            yield q_mul(q_axis_angle(adir, roll), q_dir), adir
+
+
+def find_side_grasps(model, xyz, offset=0.03, limit=None):
+    """Reachable horizontal side grasps at grip point xyz. gripper_frame_link is
+    driven `offset` past the block along the approach so the fingers reach its body.
+    Returns list of (joints, quat, approach_dir)."""
+    out = []
+    for quat, adir in side_grasp_quats():
+        target = np.asarray(xyz, float) + offset * adir
+        r = ik_pose(model, tuple(target), quat)
+        if r is not None:
+            out.append((r[1], list(quat), adir.tolist()))
+            if limit and len(out) >= limit:
+                break
+    return out
 
 
 def waypoints(plan_result):

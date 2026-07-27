@@ -26,7 +26,7 @@ URDF2ISAAC = {"shoulder_pan": 0, "shoulder_lift": 1, "elbow_flex": 2, "wrist_fle
 JAW_OPEN = 1.5
 JAW_CLOSE = -0.5
 
-SCENE_BLOCK_ENV = (0.16, 0.06, 0.05)
+SCENE_BLOCK_ENV = (0.11, 0.02, 0.05)   # reach-zone center: headroom for a clean top-down approach
 SCENE_BOX_ENV = (0.10, 0.20, 0.06)
 
 
@@ -62,8 +62,13 @@ def main():
     arm = moveit.get_planning_component(sp.ARM)
 
     # gripper_frame_link is a tool frame past the fingertips, so drive the grasp
-    # target GRASP_DZ below the block so the actual fingers reach it.
-    GRASP_DZ = -0.03
+    # target GRASP_DZ below the block so the fingers reach it -- but not so deep it
+    # jams the gripper into the mat on descent (which shoves the block).
+    GRASP_DZ = -0.03   # tool below the block so the fingers reach it (grips in test)
+    PRE_DZ = 0.05      # NOTE: top-down reach ceiling is ~env 0.10-0.12, so this is
+                       # the max clearance a straight-down approach can get -- too
+                       # little to avoid clipping the block. A horizontal/side grasp
+                       # (the proven real-arm method) is the real fix; see notes.
     bx, by, bz = sp.env_to_base(SCENE_BLOCK_ENV)
     block = (bx, by, bz + GRASP_DZ)
     place = tuple(sp.env_to_base(SCENE_BOX_ENV))
@@ -76,7 +81,7 @@ def main():
     gq = grasp[2]  # grasp orientation, reused for the pre-grasp + vertical approach
     # pre-grasp uses the SAME orientation as the grasp so the wrist doesn't snap at
     # the descent start (which knocks the block).
-    pre = sp.ik_pose(model, (bx, by, bz + 0.05), gq)
+    pre = sp.ik_pose(model, (bx, by, bz + PRE_DZ), gq)
     if pre is None:
         print("PLAN_FAILED: unreachable pre"); os._exit(2)
 
@@ -100,18 +105,20 @@ def main():
             frames.append(list(r[1]) + [jaw]); last = r[1]
         return frames, last
 
-    rest = RobotState(model); rest.set_to_default_values(sp.ARM, "rest"); rest.update()
-    j = list(rest.get_joint_group_positions(sp.ARM))
+    # Start from the high "home" pose (arm up, gripper forward) so the approach
+    # comes in from above and clear of the block, per the proven real-arm method.
+    home = RobotState(model); home.set_to_default_values(sp.ARM, "home"); home.update()
+    j = list(home.get_joint_group_positions(sp.ARM))
     traj = []
 
-    t1, j = plan(j, pre[0]); traj += resample(t1, JAW_OPEN)                    # rest -> pre (free)
-    d, j = straight(bx, by, bz + 0.05, bz + GRASP_DZ, gq, JAW_OPEN); traj += d  # vertical descent
-    traj += ramp_jaw(j, JAW_OPEN, JAW_CLOSE)                                    # close on block
-    u, j = straight(bx, by, bz + GRASP_DZ, bz + 0.05, gq, JAW_CLOSE); traj += u # vertical lift
-    t4, j = plan(j, over[0]); traj += resample(t4, JAW_CLOSE)                   # transport (free)
-    t5, j = plan(j, place_s[0]); traj += resample(t5, JAW_CLOSE)               # over -> place
-    traj += ramp_jaw(place_s[1], JAW_CLOSE, JAW_OPEN)                           # release
-    t6, j = plan(j, rest); traj += resample(t6, JAW_OPEN)                       # retreat (free)
+    t1, j = plan(j, pre[0]); traj += resample(t1, JAW_OPEN)                        # home -> pre (free)
+    d, j = straight(bx, by, bz + PRE_DZ, bz + GRASP_DZ, gq, JAW_OPEN); traj += d   # vertical descent
+    traj += ramp_jaw(j, JAW_OPEN, JAW_CLOSE)                                       # close on block
+    u, j = straight(bx, by, bz + GRASP_DZ, bz + PRE_DZ, gq, JAW_CLOSE); traj += u  # vertical lift
+    t4, j = plan(j, over[0]); traj += resample(t4, JAW_CLOSE)                      # transport (free)
+    t5, j = plan(j, place_s[0]); traj += resample(t5, JAW_CLOSE)                   # over -> place
+    traj += ramp_jaw(place_s[1], JAW_CLOSE, JAW_OPEN)                              # release
+    t6, j = plan(j, home); traj += resample(t6, JAW_OPEN)                          # retreat (free)
 
     out = {"fps": FPS, "joint_order": ISAAC_ORDER, "block_env": SCENE_BLOCK_ENV,
            "box_env": SCENE_BOX_ENV, "jaw_open": JAW_OPEN, "jaw_close": JAW_CLOSE,

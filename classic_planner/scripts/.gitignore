@@ -1,0 +1,5 @@
+# Generated at runtime by the FK / pipeline scripts (not source)
+*.png
+*.mp4
+*.json
+__pycache__/
