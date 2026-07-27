@@ -93,30 +93,35 @@ isaaclab.sh -p topdown_pipeline.py --target 125 --max_attempts 260 \
 - Modality config: `Isaac-GR00T/examples/SO100/so100_config.py`; embodiment tag
   `NEW_EMBODIMENT` (SO-100/101 are the same 6-DOF arm).
 
-**Command** (hyperparameters from the user's prior run):
+**Environment: the `real-robot:latest` Docker image** (the "real/sim" container),
+NOT the Isaac python. It ships `/Isaac-GR00T` at `ead5283`/`n1.6-release` (the
+model-card version), Py 3.10, torch 2.13+cu130 (works on the GB10), **flash_attn
+2.8.3**, and **torchcodec 0.13 — the DEFAULT video backend, so `decord` is never
+needed** (it's lazily imported only if explicitly requested). An earlier note here
+wrongly concluded "blocked on aarch64 / x86-only"; the GB10 runs it fine.
+
+Setup + command (validated; full 30k run trained at ~4 s/step ≈ 33 h):
 ```bash
-cd Isaac-GR00T
-MAX_STEPS=30000 bash examples/finetune.sh \
-  --base-model-path nvidia/GR00T-N1.6-3B \
-  --dataset-path CursedRock17/so101_block_pickplace_planned \
-  --embodiment-tag NEW_EMBODIMENT \
-  --modality-config-path examples/SO100/so100_config.py \
-  --output-dir ./checkpoints/so101_block_pickplace
-# defaults applied by the script: lr 1e-4, warmup 0.05, weight-decay 1e-5,
-# global batch 32, save every 1000, save-total-limit 5, bf16.
+docker run -d --name gr00t-ft --privileged --gpus all --network=host --shm-size=32g \
+  -v $PWD/ft_data:/workspace/ft_data -v $PWD/ft_out:/workspace/ft_out \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  --entrypoint /bin/bash real-robot:latest -c "sleep infinity"
+docker exec gr00t-ft bash -lc 'pip install timm omegaconf hydra-core; ln -sf /usr/bin/python3 /usr/local/bin/python'
+docker exec -d gr00t-ft bash -lc 'cd /Isaac-GR00T && \
+  NUM_GPUS=1 MAX_STEPS=30000 SAVE_STEPS=1000 GLOBAL_BATCH_SIZE=32 USE_WANDB=0 \
+  bash examples/finetune.sh \
+    --base-model-path nvidia/GR00T-N1.6-3B \
+    --dataset-path /workspace/ft_data/so101_block_pickplace_planned \
+    --embodiment-tag NEW_EMBODIMENT \
+    --modality-config-path examples/SO100/so100_config.py \
+    --output-dir /workspace/ft_out/so101_block_pickplace'
 ```
 
-**Why it did not run on this box (GB10 / aarch64):**
-- ✅ `torch 2.9.0+cu130` present and working on the GB10 (sm_121); `gr00t` installs
-  (`--no-deps --ignore-requires-python` on Py 3.11); `transformers`/`accelerate`/
-  `diffusers`/`einops` already present; modality config prepared.
-- ❌ **`decord`** (GR00T's video decoder) has **no aarch64 wheel** — nor does the
-  `eva-decord` fork; the dataloader can't read videos without a source build.
-- ❌ **`flash_attn`** missing — needs a long, fragile aarch64+CUDA compile.
-- ❌ 30,000 steps ≈ many hours regardless.
-
-**Recommendation:** run the command above on an x86 A100/H100 box (as the original
-run was) against the now-public dataset. Everything upstream is done and reproducible.
+**Gotchas hit:** `--shm-size=32g` is REQUIRED (default 64 MB `/dev/shm` deadlocks the
+DataLoader at batch 32 — hangs after step 2 with "No space left on device (28)");
+`finetune.sh` calls `python` (symlink to `python3`); embodiment tag must be the enum
+NAME `NEW_EMBODIMENT`; add `timm`/`omegaconf`/`hydra-core` (missing from the
+inference image). Checkpoints save every 1000 steps to the host `ft_out/` (resumable).
 
 ---
 
@@ -129,11 +134,13 @@ run was) against the now-public dataset. Everything upstream is done and reprodu
 | DR collection → 125 flawless episodes | ✅ |
 | Dataset finalized + v3→v2.1 | ✅ |
 | Push to hub (public) | ✅ |
-| GR00T-N1.6 fine-tune | ⚠️ config + command ready; blocked on aarch64 (decord/flash-attn) → run on x86 |
+| GR00T-N1.6 fine-tune | ✅ running on the GB10 via `real-robot:latest` (~4 s/step, ~33 h) |
 
 ## Gotchas / lessons
 - Always `ds.finalize()` LeRobot datasets, or lose the run to footerless parquets.
 - On aarch64, use the `imageio_ffmpeg` binary; the system `ffmpeg` is wrong-arch.
-- `decord` / `flash_attn` are the GR00T aarch64 blockers — fine-tune on x86.
+- GR00T fine-tunes fine on the GB10 via `real-robot:latest` (torchcodec is the
+  default video backend, so `decord` is not needed; `flash_attn` is prebuilt).
+  Requires `--shm-size=32g` or the DataLoader deadlocks at batch 32.
 - Speed lever for future collections: run `num_envs > 1` (TiledCamera renders many
   envs in one pass) — the single-env render was the throughput bottleneck.
