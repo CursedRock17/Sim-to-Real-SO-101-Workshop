@@ -14,12 +14,18 @@ import functools, os, argparse, math
 print = functools.partial(print, flush=True)
 from isaaclab.app import AppLauncher
 pa = argparse.ArgumentParser()
-pa.add_argument("--episodes", type=int, default=5)
+pa.add_argument("--episodes", type=int, default=5, help="fixed episode count (ignored if --target > 0)")
+pa.add_argument("--target", type=int, default=0, help="collect until this many SUCCESSFUL episodes")
+pa.add_argument("--max_attempts", type=int, default=500, help="cap on attempts when using --target")
 pa.add_argument("--repo_id", type=str, default="CursedRock17/so101_block_grab_planned")
 pa.add_argument("--out", type=str, default=None)
 pa.add_argument("--save_success_only", action="store_true")
 pa.add_argument("--fixed_block", type=str, default=None, help="x,y to place the block each episode")
 pa.add_argument("--video", type=str, default=None, help="mp4 path; saves the first successful episode")
+pa.add_argument("--seed", type=int, default=0)
+pa.add_argument("--num_envs", type=int, default=1,
+                help=">1 runs parallel envs (TiledCamera renders them in one pass) for a big "
+                     "throughput win; sim runs in parallel, dataset writing stays sequential.")
 AppLauncher.add_app_launcher_args(pa)
 a = pa.parse_args(); a.headless = True; a.enable_cameras = True
 app = AppLauncher(a).app
@@ -41,6 +47,25 @@ GRASP_Z, HOVER_Z = 0.05, 0.095       # finger-centre heights for the top-down gr
 HIGH_Z, DROP_Z = 0.18, 0.11          # frame heights for the high carry / drop into box (ENV)
 BOX_ENV = (0.10, 0.20)
 SEED = np.array([0.114, 0.304, 0.017, 1.329, 0.521])   # median demo grasp config
+
+# ---- strict "placed in box" metric (mirrors mdp.terms.vial_placed_on_rack) -------
+# The box is a STATIC axis-aligned AssetBaseCfg at env (0.10, 0.20, 0.091), so we can
+# check in world/env coords directly (no per-frame box-pose query needed). A block
+# counts as placed only if its centre is inside the box footprint AND below the rim
+# (actually dropped IN, not perched on top/beside) AND settled (near-zero velocity,
+# so a block mid-bounce or rolling over the rim does not count).
+# NOTE: extents are for the current CardboardBox.usd; verify if the box changes.
+BOX_HALF = (0.06, 0.06)              # interior half-extents (x, y), env
+BOX_FLOOR, BOX_RIM = 0.03, 0.12      # settled block-centre z range inside the box
+VEL_SETTLED = 0.05                   # m/s: below this the block is at rest
+
+
+def block_in_box(pos, lin_vel):
+    """pos=(x,y,z) env, lin_vel=(3,) world. True iff the block is settled inside the box."""
+    return (abs(pos[0] - BOX_ENV[0]) < BOX_HALF[0]
+            and abs(pos[1] - BOX_ENV[1]) < BOX_HALF[1]
+            and BOX_FLOOR < pos[2] < BOX_RIM
+            and float(np.linalg.norm(lin_vel)) < VEL_SETTLED)
 
 # ---- LeRobot normalized-unit encoding (inverse of lerobot_interface mapping) ----
 DEG_MIN = np.array([-110, -100, -100, -95, -160.0]); DEG_MAX = np.array([110, 100, 90, 95, 160.0])
@@ -131,14 +156,14 @@ def plan(bx, by, home_q):
 
 
 # ---- env + dataset ----------------------------------------------------------
-env = gym.make(TASK, cfg=parse_env_cfg(TASK, device="cuda:0", num_envs=1))
+env = gym.make(TASK, cfg=parse_env_cfg(TASK, device="cuda:0", num_envs=a.num_envs))
 obs, _ = env.reset()
 u = env.unwrapped; dev = u.device
 robot = u.scene["robot"]; block = u.scene["block_red"]; jn = list(robot.data.joint_names)
 
 
-def cam(o, k):
-    img = o["visual"][k][0].detach().cpu().numpy()
+def cam(o, k, i=0):
+    img = o["visual"][k][i].detach().cpu().numpy()
     return (img * 255).clip(0, 255).astype(np.uint8) if img.max() <= 1.0 else img.clip(0, 255).astype(np.uint8)
 
 
@@ -164,15 +189,111 @@ def set_arm(q5, jaw, teleport=False):
 
 
 import imageio.v2 as imageio
+rng = np.random.default_rng(a.seed)
 fixed = tuple(float(v) for v in a.fixed_block.split(",")) if a.fixed_block else None
+save_success_only = a.save_success_only or a.target > 0
+block_blue = u.scene["block_blue"] if "block_blue" in u.scene.keys() else None
+AWAY = [0.45, 0.45, 0.05]                              # off-mat parking spot for the distractor
 video_saved = False
-succ = 0
-for ep in range(a.episodes):
+
+
+def collect_parallel():
+    """Vectorized collection over a.num_envs parallel envs. The sim/render (the
+    throughput bottleneck) runs N envs at once via TiledCamera; dataset writing stays
+    sequential (one episode at a time). Each batch = one full reset -> N fresh
+    randomized episodes; per-env trajectories are padded to a common length and
+    stepped in lockstep, frames buffered per env, then successful episodes saved.
+    UNTESTED (needs GPU) -- smoke-test with `--num_envs 2 --target 2` once free.
+    """
+    N = a.num_envs
+    save_only = a.save_success_only or a.target > 0
+    succ = 0; attempts = 0
+    print(f"parallel collection: num_envs={N}, target={a.target}")
+    while succ < a.target and attempts < a.max_attempts:
+        obs, _ = env.reset()
+        attempts += N
+        # block-amount DR: park the blue distractor off-mat in ~40% of envs
+        if block_blue is not None:
+            park = rng.random(N) < 0.4
+            pose = torch.cat([block_blue.data.root_pos_w.clone(),
+                              block_blue.data.root_quat_w.clone()], dim=1)     # (N,7)
+            away = torch.tensor(AWAY, device=dev, dtype=pose.dtype)
+            for i in range(N):
+                if park[i]: pose[i, :3] = away
+            block_blue.write_root_pose_to_sim(pose)
+            block_blue.write_root_velocity_to_sim(torch.zeros((N, 6), device=dev))
+        for _ in range(3): u.sim.step(render=False); u.scene.update(u.sim.get_physics_dt())
+        bpos = block.data.root_pos_w.detach().cpu().numpy()                   # (N,3)
+        arm_idx = [jn.index(n) for n in ISAAC_ARM]
+        home = robot.data.joint_pos[:, arm_idx].detach().cpu().numpy()        # (N,5)
+        trajs = [plan(float(bpos[i, 0]), float(bpos[i, 1]), home[i]) for i in range(N)]
+        trajs = [t[0] if t is not None else None for t in trajs]
+        planned = [i for i in range(N) if trajs[i] is not None]
+        if not planned:
+            print(f"batch: all {N} plans failed"); continue
+        L = max(len(trajs[i]) for i in planned)
+        # snap each planned env's arm to its first frame (others stay at reset pose)
+        q0 = robot.data.joint_pos.clone()
+        for i in planned:
+            for k, n in enumerate(ISAAC_ARM): q0[i, jn.index(n)] = float(trajs[i][0][0][k])
+            q0[i, jn.index("Jaw")] = trajs[i][0][1]
+        robot.write_joint_state_to_sim(q0, torch.zeros_like(q0))
+        for _ in range(2): u.sim.step(render=False); u.scene.update(u.sim.get_physics_dt())
+        z0 = block.data.root_pos_w[:, 2].clone()                              # (N,)
+        maxlift = torch.zeros(N, device=dev)
+        bufs = {i: [] for i in planned}
+        act = torch.zeros((N, 6), device=dev)
+        for t in range(L):
+            for i in range(N):
+                tr = trajs[i]
+                q5, jaw = (home[i], JAW_OPEN) if tr is None else (tr[t] if t < len(tr) else tr[-1])
+                for k in range(5): act[i, k] = float(q5[k])
+                act[i, 5] = jaw
+            for _ in range(2): obs, _, _, _, _ = env.step(act)
+            maxlift = torch.maximum(maxlift, block.data.root_pos_w[:, 2] - z0)
+            state = obs["policy"]["joint_pos_obs"].detach().cpu().numpy()     # (N,6)
+            for i in planned:
+                if t < len(trajs[i]):                                        # record real frames only
+                    bufs[i].append((act[i].detach().cpu().numpy().copy(), state[i].copy(),
+                                    cam(obs, "rgb_external_D455", i), cam(obs, "rgb_ego", i)))
+        bf = block.data.root_pos_w.detach().cpu().numpy()
+        bvel = block.data.root_lin_vel_w.detach().cpu().numpy()
+        for i in planned:
+            ok = block_in_box(bf[i].tolist(), bvel[i].tolist()) and float(maxlift[i]) > 0.03
+            if ok or not save_only:
+                for (a6, st, top, wrist) in bufs[i]:
+                    ds.add_frame({"action": rad_to_norm(a6[:5], a6[5]),
+                                  "observation.state": rad_to_norm(st[:5], st[5]),
+                                  "observation.images.top": top,
+                                  "observation.images.wrist.top": wrist,
+                                  "task": "pick the block and place it in the box"})
+                ds.save_episode(); succ += int(ok)
+        print(f"batch done: attempts~{attempts} planned={len(planned)}/{N} succ={succ}/{a.target}")
+    ds.finalize()
+    print(f"PIPELINE_DONE(parallel) attempts~{attempts} success={succ}")
+
+
+if a.num_envs > 1:
+    collect_parallel()
+    env.close(); app.close()
+    import sys; sys.exit(0)
+
+succ = 0; ep = -1
+while (succ < a.target) if a.target > 0 else (ep + 1 < a.episodes):
+    ep += 1
+    if a.target > 0 and ep >= a.max_attempts:
+        print(f"REACHED max_attempts={a.max_attempts} with {succ} successes"); break
     obs, _ = env.reset()
-    if fixed is not None:                              # force a favorable block pose
+    # block-amount DR: ~40% of episodes keep only the red block (park the blue one)
+    one_block = block_blue is not None and rng.random() < 0.4
+    if block_blue is not None:
+        if one_block:
+            block_blue.write_root_pose_to_sim(torch.tensor([[*AWAY, 1.,0.,0.,0.]], device=dev))
+            block_blue.write_root_velocity_to_sim(torch.zeros((1, 6), device=dev))
+    if fixed is not None:                              # optional: force a favorable block pose
         block.write_root_pose_to_sim(torch.tensor([[fixed[0], fixed[1], 0.05, 1.,0.,0.,0.]], device=dev))
         block.write_root_velocity_to_sim(torch.zeros((1, 6), device=dev))
-        for _ in range(3): u.sim.step(render=False); u.scene.update(u.sim.get_physics_dt())
+    for _ in range(3): u.sim.step(render=False); u.scene.update(u.sim.get_physics_dt())
     bp = block.data.root_pos_w[0].tolist(); bx, by = bp[0], bp[1]
     home_q = np.array([float(robot.data.joint_pos[0, jn.index(n)]) for n in ISAAC_ARM])
     pl = plan(bx, by, home_q)
@@ -182,13 +303,16 @@ for ep in range(a.episodes):
     set_arm(fr[0][0], fr[0][1], teleport=True)
     for _ in range(2): u.sim.step(render=False); u.scene.update(u.sim.get_physics_dt())
     z0 = float(block.data.root_pos_w[0, 2]); maxlift = 0.0
-    vid_frames = []
+    vid_frames = []; aborted = False
+    LIFT_CHECK = 78                              # by here the grasp+lift is done
     for fi, (q5, jaw) in enumerate(fr):
         act = torch.zeros((1, 6), device=dev)
         for k in range(5): act[0, k] = float(q5[k])
         act[0, 5] = jaw
         for _ in range(2): obs, _, _, _, _ = env.step(act)
         maxlift = max(maxlift, float(block.data.root_pos_w[0, 2]) - z0)
+        if fi >= LIFT_CHECK and maxlift < 0.02:   # grasp failed -> abort before transport
+            aborted = True; break
         top = cam(obs, "rgb_external_D455")
         if a.video and not video_saved:
             vid_frames.append(top.copy())
@@ -201,18 +325,21 @@ for ep in range(a.episodes):
             "task": "pick the block and place it in the box",
         })
     bf = block.data.root_pos_w[0].tolist()
-    in_box = abs(bf[0] - BOX_ENV[0]) < 0.06 and abs(bf[1] - BOX_ENV[1]) < 0.06
-    success = in_box and maxlift > 0.03
-    print(f"ep {ep}: block=({bx:.3f},{by:.3f}) maxlift={maxlift:+.3f} "
-          f"final=({bf[0]:.3f},{bf[1]:.3f},{bf[2]:.3f}) in_box={in_box} SUCCESS={success}")
+    bvel = block.data.root_lin_vel_w[0].tolist()
+    success = (not aborted) and block_in_box(bf, bvel) and maxlift > 0.03
+    print(f"attempt {ep} (succ {succ}/{a.target if a.target else a.episodes}): "
+          f"block=({bx:.3f},{by:.3f}) one_block={one_block} maxlift={maxlift:+.3f} "
+          f"aborted={aborted} final=({bf[0]:.3f},{bf[1]:.3f},{bf[2]:.3f}) SUCCESS={success}")
     if a.video and success and not video_saved:
         imageio.mimwrite(a.video, vid_frames, fps=FPS, quality=8)
         video_saved = True
         print(f"VIDEO_SAVED {a.video} ({len(vid_frames)} frames)")
-    if success or not a.save_success_only:
+    if success or (not save_success_only and not aborted):
         ds.save_episode(); succ += int(success)
     else:
         ds.clear_episode_buffer()
 
-print(f"PIPELINE_DONE episodes={a.episodes} success={succ}")
+print(f"PIPELINE_DONE attempts={ep + 1} success={succ}")
+ds.finalize()          # CRITICAL: writes the parquet footers so the dataset is valid
+print("FINALIZED")
 env.close(); app.close()
