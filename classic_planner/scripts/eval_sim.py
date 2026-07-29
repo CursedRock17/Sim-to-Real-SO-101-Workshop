@@ -28,8 +28,9 @@ pa.add_argument("--port", type=int, default=5555)
 pa.add_argument("--action_horizon", type=int, default=8, help="actions executed per policy query")
 pa.add_argument("--max_control_steps", type=int, default=220, help="policy steps per episode cap")
 pa.add_argument("--lang", type=str, default="pick the block and place it in the box")
+pa.add_argument("--gui", action="store_true", help="open the Isaac Sim GUI (non-headless)")
 AppLauncher.add_app_launcher_args(pa)
-a = pa.parse_args(); a.headless = True; a.enable_cameras = True
+a = pa.parse_args(); a.headless = not a.gui; a.enable_cameras = True
 app = AppLauncher(a).app
 
 import numpy as np, torch
