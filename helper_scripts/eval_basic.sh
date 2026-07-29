@@ -42,17 +42,20 @@ if ! docker exec "$SERVER" bash -lc 'pgrep -f run_gr00t_server >/dev/null'; then
             --embodiment-tag NEW_EMBODIMENT --port $PORT > /tmp/server.log 2>&1"
 fi
 
-# 3) wait for the 3B model to load
-echo -n "waiting for server to be ready (model load ~1-2 min)"
-for _ in $(seq 1 80); do
-    if docker exec "$SERVER" bash -lc 'grep -qi "ready\|listening" /tmp/server.log 2>/dev/null'; then
-        echo " -> READY"; break
-    fi
-    if docker exec "$SERVER" bash -lc 'grep -qiE "Error|Traceback" /tmp/server.log 2>/dev/null'; then
+# 3) wait until the server actually ANSWERS a ping. (Do NOT use ss/log-grep: the zmq
+#    socket doesn't show in ss, and the "ready" print is stdout-buffered -- both give
+#    false negatives. On this ARM box the 3B model load can take several minutes.)
+PINGPY="import zmq,msgpack,sys;c=zmq.Context();s=c.socket(zmq.REQ);s.setsockopt(zmq.RCVTIMEO,3000);s.setsockopt(zmq.LINGER,0);s.connect('tcp://localhost:$PORT');s.send(msgpack.packb({'endpoint':'ping'},use_bin_type=True));sys.exit(0 if msgpack.unpackb(s.recv(),raw=False).get('status')=='ok' else 1)"
+echo -n "waiting for server to answer a ping on :$PORT (model load can take several min)"
+READY=0
+for _ in $(seq 1 120); do
+    if docker exec "$SERVER" python -c "$PINGPY" >/dev/null 2>&1; then READY=1; echo " -> READY"; break; fi
+    if docker exec "$SERVER" bash -lc 'grep -qiE "Traceback|Error:|Address already" /tmp/server.log 2>/dev/null'; then
         echo " -> SERVER ERROR:"; docker exec "$SERVER" bash -lc 'tail -8 /tmp/server.log'; exit 1
     fi
-    echo -n "."; sleep 3
+    echo -n "."; sleep 5
 done
+[ "$READY" = 1 ] || echo " -> still not answering; it may still be loading -- ping :$PORT again shortly."
 
 # 4) which Isaac container is up (teleop-moveit image) for the sim client
 ISAAC=$(docker ps --format '{{.Names}}\t{{.Image}}' | awk -F'\t' '$2 ~ /teleop-moveit/ {print $1; exit}')
