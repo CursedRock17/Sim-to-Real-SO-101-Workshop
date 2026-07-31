@@ -54,6 +54,54 @@ def randomize_robot_color(env,
         material_prim = sim_utils.find_matching_prims(material_prim_path)[0]
         material_prim.GetAttribute("inputs:diffuse_color_constant").Set(selected_color)
 
+
+# Block color palette for domain randomization. Defaults give a 50/50 red/blue
+# draw; this is the single source of truth (table_env_cfg imports it for the
+# block's initial spawn material).
+BLOCK_COLORS = {
+    "red": (0.8, 0.1, 0.1),
+    "blue": (0.1, 0.2, 0.8),
+}
+
+
+def randomize_block_color(
+    env,
+    env_ids: torch.Tensor | None,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("block"),
+    color_names: list[str] = list(BLOCK_COLORS.keys()),
+):
+    """Recolor the block on each reset, drawing uniformly from ``color_names``.
+
+    With the default two-entry palette this is a 50/50 red/blue draw. Unlike the
+    robot (an MDL material with ``inputs:diffuse_color_constant``), the block is
+    a cuboid primitive with a bound ``UsdPreviewSurface``: IsaacLab nests the
+    mesh + material under a ``geometry`` prim, so the shader lives at
+    ``<block>/geometry/material/Shader`` and the color is on its
+    ``inputs:diffuseColor`` (verified against the live stage). Each environment
+    is colored independently so multi-env data collection sees a real 50/50 mix.
+    """
+    asset = env.scene[asset_cfg.name]
+    # cfg.prim_path is the regex form (e.g. "/World/envs/env_.*/Block") at runtime;
+    # swap the env wildcard for a concrete index to address each env's own block,
+    # so env_ids map cleanly to prims (unlike find_matching_prims' traversal order).
+    prim_expr = asset.cfg.prim_path
+
+    if env_ids is None:
+        env_list = range(env.num_envs)
+    else:
+        env_list = [int(i) for i in env_ids]
+
+    with Sdf.ChangeBlock():
+        for i in env_list:
+            idx = torch.randint(0, len(color_names), (1,), device="cpu").item()
+            color = BLOCK_COLORS[color_names[idx]]
+            shader_path = prim_expr.replace("env_.*", f"env_{i}") + "/geometry/material/Shader"
+            shader_prims = sim_utils.find_matching_prims(shader_path)
+            if not shader_prims:
+                continue
+            shader_prims[0].GetAttribute("inputs:diffuseColor").Set(Gf.Vec3f(*color))
+
+
 def randomize_mat_rotation(
     env,
     env_ids: torch.Tensor | None,

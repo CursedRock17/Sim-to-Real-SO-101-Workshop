@@ -262,3 +262,7 @@ tests/
 real_robot/core
 
 docker/env
+
+ft_data
+ft_out
+models

@@ -48,7 +48,12 @@ from isaaclab.envs.mdp import reset_root_state_uniform
 from isaacsim.core.utils.rotations import euler_angles_to_quat
 
 from sim_to_real_so101 import assets
-from sim_to_real_so101.mdp import randomize_robot_color, ROBOT_COLORS
+from sim_to_real_so101.mdp import (
+    randomize_robot_color,
+    randomize_block_color,
+    ROBOT_COLORS,
+    BLOCK_COLORS,
+)
 
 from .task_env_cfg import (
     SO101TaskSceneCfg,
@@ -78,11 +83,8 @@ BLOCK_SIZE = (0.022, 0.022, 0.05)  # rectangular block (m); tune to the CAD bloc
 
 BOX_COLOR = (0.757, 0.604, 0.424)  # cardboard tan (from the CAD/STEP material)
 
-# Block colors applied in Isaac Sim (matches the red/blue blocks in the notes).
-BLOCK_COLORS = {
-    "red": (0.8, 0.1, 0.1),
-    "blue": (0.1, 0.2, 0.8),
-}
+# Block colors (red/blue) live in mdp.resets as the DR source of truth; imported
+# above. Used here only for the block's initial spawn material.
 
 # Base rigid block as a cuboid primitive: valid box collider + mass, colored in-sim.
 block_base = RigidObjectCfg(
@@ -137,22 +139,18 @@ class SO101TableTaskSceneCfg(SO101TaskSceneCfg):
         ),
     )
 
-    # Colored rigid blocks. Colors are applied in-sim via a bound preview surface.
-    # Spawn positions sit inside the top-down-reachable zone (reach_zone.py:
-    # ENV x[0.034,0.194], y[-0.139,0.181]); with the +/-0.03 reset randomization
-    # every sampled pose stays graspable.
-    block_red = block_base.replace()
-    block_red.prim_path = "{ENV_REGEX_NS}/Block_Red"
-    block_red.init_state.pos = (0.16, 0.06, SURFACE_Z)
-    block_red.spawn.visual_material = sim_utils.PreviewSurfaceCfg(
+    # Single rigid block. Its color is domain-randomized 50/50 red/blue on every
+    # reset (reset_block_color); the spawn material below is just the starting
+    # color before the first reset recolors it. Center sits in the oracle's
+    # empirically-verified top-down-graspable zone (so101_fk grasp-IK sweep:
+    # x[0.07,0.16] x y[-0.11,0.11] plan cleanly; below x~0.07 there is a dead
+    # zone near y=0, and beyond x~0.16 the -y corner drops out). The reset
+    # position DR (see reset_block) spans that rectangle, clear of the box at y=0.20.
+    block = block_base.replace()
+    block.prim_path = "{ENV_REGEX_NS}/Block"
+    block.init_state.pos = (0.115, 0.0, SURFACE_Z)
+    block.spawn.visual_material = sim_utils.PreviewSurfaceCfg(
         diffuse_color=BLOCK_COLORS["red"]
-    )
-
-    block_blue = block_base.replace()
-    block_blue.prim_path = "{ENV_REGEX_NS}/Block_Blue"
-    block_blue.init_state.pos = (0.16, -0.06, SURFACE_Z)
-    block_blue.spawn.visual_material = sim_utils.PreviewSurfaceCfg(
-        diffuse_color=BLOCK_COLORS["blue"]
     )
 
 
@@ -168,24 +166,28 @@ class TableTaskEventCfg(TaskEventCfg):
         params={"color_names": list(ROBOT_COLORS.keys())},
     )
 
-    # Randomize block start positions on reset; box stays put (stable target).
-    reset_block_red = EventTerm(
+    # Randomize the block's start pose on reset; box stays put (stable target).
+    # Offsets are added to the block's default pos (0.115, 0.0): x -> [0.07, 0.16],
+    # y -> [-0.11, 0.11] -- the oracle's verified top-down-graspable rectangle
+    # (corners included), so demo collection rarely plan-fails. Full yaw spin
+    # (the block is square in cross-section, so yaw doesn't affect graspability).
+    reset_block = EventTerm(
         func=reset_root_state_uniform,
         mode="reset",
         params={
-            "pose_range": {"x": (-0.03, 0.03), "y": (-0.03, 0.03), "yaw": (-np.pi, np.pi)},
+            "pose_range": {"x": (-0.045, 0.045), "y": (-0.11, 0.11), "yaw": (-np.pi, np.pi)},
             "velocity_range": {},
-            "asset_cfg": SceneEntityCfg("block_red"),
+            "asset_cfg": SceneEntityCfg("block"),
         },
     )
 
-    reset_block_blue = EventTerm(
-        func=reset_root_state_uniform,
+    # Domain-randomize the block color 50/50 red/blue on every reset.
+    reset_block_color = EventTerm(
+        func=randomize_block_color,
         mode="reset",
         params={
-            "pose_range": {"x": (-0.03, 0.03), "y": (-0.03, 0.03), "yaw": (-np.pi, np.pi)},
-            "velocity_range": {},
-            "asset_cfg": SceneEntityCfg("block_blue"),
+            "asset_cfg": SceneEntityCfg("block"),
+            "color_names": list(BLOCK_COLORS.keys()),
         },
     )
 
