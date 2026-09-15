@@ -58,3 +58,22 @@ python3 Isaac-GR00T/gr00t/eval/real_robot/SO100/eval_so101_attn.py   --robot.typ
       ego:  {type: opencv, index_or_path: $CAMERA_GRIPPER, width: 640, height: 480, fps: 30, fourcc: MJPG},
       external_D455:  {type: opencv, index_or_path: $CAMERA_EXTERNAL, width: 640, height: 480, fps: 30, fourcc: MJPG}
   }"   --policy_host=localhost   --policy_port=5556   --lang_instruction="Pick up the vial and place it in the yellow rack" --play_sounds false --rerun false --plot true --timeout=60
+
+
+# Teleop Record
+lerobot-record   --robot.type=so101_follower   --robot.port=$ROBOT_PORT   --robot.id=$ROBOT_ID   --teleop.type=so101_leader   --teleop.port=$TELEOP_PORT   --teleop.id=$TELEOP_ID   --display_data=true --dataset.repo_id=${HF_USER}/so101-teleop-box-isaac-real --dataset.num_episodes=5 --dataset.push_to_hub=true --dataset.reset_time_s=5 --dataset.episode_time_s=15  --dataset.single_task="Pick up the block and place in the box" --play_sounds=false   --robot.cameras='{
+    "wrist": {
+      "type": "opencv",
+      "index_or_path": '"$CAMERA_GRIPPER"',
+      "width": 640,
+      "height": 480,
+      "fps": 30, "fourcc": "MJPG"
+    },
+    "front": {
+      "type": "opencv",
+      "index_or_path": '"$CAMERA_EXTERNAL"',
+      "width": 640,
+      "height": 480,
+      "fps": 30, "fourcc": "MJPG"
+    }
+  }'
