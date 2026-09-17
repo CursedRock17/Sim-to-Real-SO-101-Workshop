@@ -83,21 +83,30 @@ writes the SSH config): `ssh <instance> -L 5555:localhost:5555`.
 Run the client inside the **real-robot container, without `--gpus all`** — the
 client only needs USB/camera/LeRobot access, not the GPU:
 
+> **Copy-paste warning:** every `\` below must be the last character on its line.
+> If a trailing comment or whitespace ends up after a `\`, bash treats the line
+> continuation as broken and runs each line as its own (invalid) command — that's
+> the source of errors like `docker: invalid reference format` or
+> `bash: --device=/dev/ttyACM0: No such file or directory`. Comments are kept on
+> their own lines above the option they describe for this reason.
+
 ```bash
+# --network=host is REQUIRED: inside a bridged container, localhost is the
+# container's own loopback, not the host where the tunnel lands — the client
+# would never reach the server otherwise. Host networking makes localhost:5555
+# the forwarded port.
+# --device=/dev/ttyACM0 is the SO-101 arm (adjust to your port); the two
+# --device flags below it are the cameras.
 docker run --rm -it \
-    --network=host \                     # REQUIRED: so localhost:5555 is the tunnel
-    --device=/dev/ttyACM0 \              # the SO-101 arm (adjust to your port)
-    --device=/dev/video0 --device=/dev/video1 \   # the 2 cameras
+    --network=host \
+    --device=/dev/ttyACM0 \
+    --device=/dev/video0 --device=/dev/video1 \
     <real-robot-image> \
     python3 docker/real/scripts/so101_eval.py \
         --policy_host=localhost \
         --policy_port=5555 \
         --lang_instruction="Pick up vial and place it in the target location"
 ```
-
-Why `--network=host`: inside a bridged container, `localhost` is the container's
-own loopback, **not** the host where the tunnel lands — so the client would never
-reach the server. Host networking makes `localhost:5555` the forwarded port.
 
 The client only needs `lerobot` (arm + camera drivers) and `gr00t`'s `PolicyClient`
 (pure zmq/msgpack/numpy — no CUDA, no flash-attn), so no GPU is required.
