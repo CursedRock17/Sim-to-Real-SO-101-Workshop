@@ -161,31 +161,58 @@ The client also performs this check before each normal rollout.
 
 ## 6. Run a bounded rollout on the laptop
 
-Connect the follower and both cameras, then set your actual device paths and
-calibrated robot ID on the **laptop** (examples below must match your hardware):
+Connect the follower and both cameras, then identify the cameras by their stable
+udev names on the **laptop**; each physical camera may expose multiple entries,
+so use its `video-index0` capture device:
+
+```bash
+ls -l /dev/v4l/by-id/
+```
+
+Set the paths below to the two intended cameras, resolving the stable links to
+their current `/dev/video*` nodes before Docker starts:
 
 ```bash
 export ROBOT_PORT=/dev/ttyACM0
 export ROBOT_ID=muninn
-export CAMERA_EXTERNAL=/dev/video0
-export CAMERA_GRIPPER=/dev/video2
+export CAMERA_EXTERNAL_HOST="$(readlink -f /dev/v4l/by-id/REPLACE_WITH_EXTERNAL-video-index0)"
+export CAMERA_GRIPPER_HOST="$(readlink -f /dev/v4l/by-id/REPLACE_WITH_GRIPPER-video-index0)"
+test -c "$CAMERA_EXTERNAL_HOST" && test -c "$CAMERA_GRIPPER_HOST"
 mkdir -p outputs
 
-docker run --rm -it --network=host \
-    --device="$ROBOT_PORT" \
-    --device="$CAMERA_EXTERNAL" --device="$CAMERA_GRIPPER" \
+docker run --rm -it --name so101-client \
+    --network=host \
+    --device="$ROBOT_PORT:/dev/ttyACM0" \
+    --device="$CAMERA_EXTERNAL_HOST:/dev/video-front" \
+    --device="$CAMERA_GRIPPER_HOST:/dev/video-wrist" \
     -v "$HOME/.cache/huggingface/lerobot/calibration:/root/.cache/huggingface/lerobot/calibration" \
     -v "$PWD/outputs:/workspace/outputs" \
-    so101-cloud-client:cpu \
+    -e ROBOT_ID="$ROBOT_ID" \
+    --entrypoint /bin/bash \
+    so101-cloud-client:cpu
+```
+
+This opens a shell instead of the image's default evaluation entrypoint.
+The fixed container names `/dev/video-front` and `/dev/video-wrist` prevent the
+laptop's built-in webcam from changing which cameras the policy receives.
+Inside the container, confirm the three mapped devices and then start evaluation:
+
+```bash
+ls -l /dev/ttyACM0 /dev/video-front /dev/video-wrist
+
+python /workspace/so101_eval.py \
     --robot.type=so101_follower \
-    --robot.port="$ROBOT_PORT" --robot.id="$ROBOT_ID" \
-    --robot.cameras="{ wrist: {type: opencv, index_or_path: '$CAMERA_GRIPPER', width: 640, height: 480, fps: 30}, front: {type: opencv, index_or_path: '$CAMERA_EXTERNAL', width: 640, height: 480, fps: 30} }" \
+    --robot.port=/dev/ttyACM0 --robot.id="$ROBOT_ID" \
+    --robot.cameras="{ wrist: {type: opencv, index_or_path: '/dev/video-wrist', width: 640, height: 480, fps: 30}, front: {type: opencv, index_or_path: '/dev/video-front', width: 640, height: 480, fps: 30} }" \
     --policy_host=127.0.0.1 --policy_port=5556 \
     --model_front_key=external_D455 --model_wrist_key=ego \
     --lang_instruction="Pick up vial and place it in the target location" \
     --action_horizon=16 --timeout=60 --max_steps=300 \
     --record_video=true --video_path=/workspace/outputs/rollout.mp4
 ```
+
+To enter the same named container from a second laptop terminal while it is
+running, use `docker exec -it so101-client /bin/bash`.
 
 This command **moves the arm**: the existing controller moves to its configured
 initial pose at connection and its home pose on normal shutdown.
