@@ -225,7 +225,39 @@ class EvalConfig:
     rerun: bool = False
     passive_mode: bool = False
     plot: bool = False
+    record_video: bool = False
+    """Write the front+wrist camera feed to a side-by-side mp4 for later review."""
+    video_path: str = ""
+    """Where to write the mp4 (default: outputs/rollout_<timestamp>.mp4)."""
+    max_steps: int = 0
+    """Stop after this many control steps (0 = run until Ctrl-C). Bounds the motion."""
 
+
+
+class RolloutVideoRecorder:
+    """Save the front+wrist camera frames as one side-by-side mp4 so the rollout
+    can be reviewed afterward. lerobot gives RGB frames; cv2 writes BGR."""
+
+    def __init__(self, path: str, fps: int = 30):
+        import cv2  # opencv is already a dep (the cameras use it)
+
+        self.cv2, self.path, self.fps, self.writer = cv2, path, fps, None
+
+    def add(self, front: np.ndarray, wrist: np.ndarray) -> None:
+        # Match heights so the two views can sit next to each other, then stack.
+        if front.shape[0] != wrist.shape[0]:
+            w = int(wrist.shape[1] * front.shape[0] / wrist.shape[0])
+            wrist = self.cv2.resize(wrist, (w, front.shape[0]))
+        frame = np.hstack([front, wrist])
+        if self.writer is None:  # lazily size the writer to the first frame
+            h, w = frame.shape[:2]
+            fourcc = self.cv2.VideoWriter_fourcc(*"mp4v")
+            self.writer = self.cv2.VideoWriter(self.path, fourcc, self.fps, (w, h))
+        self.writer.write(self.cv2.cvtColor(frame, self.cv2.COLOR_RGB2BGR))
+
+    def close(self) -> None:
+        if self.writer is not None:
+            self.writer.release()
 
 
 @draccus.wrap()
@@ -246,6 +278,14 @@ def eval(cfg: EvalConfig):
     obs_buffer: List[Dict[str, float]] = []
     action_buffer: List[Dict[str, float]] = []
 
+    # Optionally record the rollout as a side-by-side (front|wrist) mp4.
+    recorder = None
+    if cfg.record_video:
+        video_path = cfg.video_path or f"outputs/rollout_{datetime.now():%Y%m%d_%H%M%S}.mp4"
+        Path(video_path).parent.mkdir(parents=True, exist_ok=True)
+        recorder = RolloutVideoRecorder(video_path)
+
+    steps = 0
     try:
         if cfg.rerun:
             so101_control.start_logging_thread()
@@ -261,14 +301,26 @@ def eval(cfg: EvalConfig):
                 so101_control.send_action(action_dict)
                 so101_control.update_log_action(action_dict)
 
-                if cfg.plot:
+                # One fresh read per step feeds both the plot buffers and the video.
+                if cfg.plot or recorder is not None:
                     step_obs = so101_control.get_observation()
-                    obs_buffer.append({k: float(step_obs[k]) for k in joint_keys})
-                    action_buffer.append({k: v for k, v in action_dict.items()})
+                    if cfg.plot:
+                        obs_buffer.append({k: float(step_obs[k]) for k in joint_keys})
+                        action_buffer.append({k: v for k, v in action_dict.items()})
+                    if recorder is not None:
+                        recorder.add(step_obs["front"], step_obs["wrist"])
 
                 toc = time.time()
                 if toc - tic < 1.0 / 30:
                     time.sleep(1.0 / 30 - (toc - tic))
+
+                steps += 1
+                if cfg.max_steps and steps >= cfg.max_steps:
+                    break
+
+            if cfg.max_steps and steps >= cfg.max_steps:
+                logging.info("Reached max_steps=%d; stopping.", cfg.max_steps)
+                break
 
     except KeyboardInterrupt:
         logging.info("Keyboard interrupt received. Shutting down...")
@@ -277,6 +329,10 @@ def eval(cfg: EvalConfig):
 
         if cfg.plot and (obs_buffer or action_buffer):
             save_eval_plot(obs_buffer, action_buffer, joint_keys)
+
+        if recorder is not None:
+            recorder.close()
+            logging.info("Saved rollout video to %s", video_path)
 
         so101_control.disconnect()
 

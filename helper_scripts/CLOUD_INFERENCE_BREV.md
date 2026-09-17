@@ -50,17 +50,29 @@ JupyterLab = No, GPU = **L4**, then Deploy. Confirm the price before deploying.
 
 ## 2. Put the server script on the instance
 
+Run this from a **separate local terminal at your repo root** (not inside the
+`brev shell` from step 1 — `brev copy` is a local command). The launchable's
+SSH user is `ubuntu` and cannot write `/workspace`; copy into the cloned repo,
+which is writable:
+
 ```bash
-brev copy ./helper_scripts/run_gr00t_server.py <instance>:/workspace/
+brev copy ./helper_scripts/run_gr00t_server.py <instance>:~/Isaac-GR00T/
 ```
 
 ## 3. Start the inference server (in the instance shell)
 
+The launchable env is **uv-managed** (there's no `source .venv` — `uv run`
+resolves deps into `.venv` on demand), so run the server through `uv` from the
+repo root:
+
 ```bash
+cd ~/Isaac-GR00T
+export PATH=$HOME/.local/bin:$PATH        # ensure `uv` is on PATH
+
 # If the model is private, authenticate first:
 #   huggingface-cli login        (or:  export HF_TOKEN=hf_xxx)
 
-python3 /workspace/run_gr00t_server.py \
+uv run python run_gr00t_server.py \
     --model-path CursedRock17/so101_teleop_vials_sim_and_real_finetune \
     --port 5555 \
     --auto-checkpoint          # downloads the repo, picks checkpoint-* if nested
@@ -135,3 +147,22 @@ print(PolicyClient(host="127.0.0.1", port=5555).ping())  # -> ok
   at the checkpoint folder.
 - **Wrong / jerky actions:** verify `--lang_instruction` matches training exactly
   and the client is sending `front` + `wrist` in the order the model expects.
+- **`No space left on device` / server core-dumps on launch:** the HF repo ships
+  *every* training checkpoint, so a plain `snapshot_download` (or `--auto-checkpoint`)
+  pulls ~200 GB+ and fills the instance disk — then `uv` can't install deps and the
+  server aborts. Fix: point `--model-path` at the **final model** (the snapshot root
+  has `config.json` + `model-*.safetensors`; that's all inference needs) and, if the
+  disk is already full, delete the checkpoint-only blobs. Because `/tmp` is on the
+  full root disk, write the delete lists to **`/dev/shm`** (RAM), not `/tmp`:
+
+  ```bash
+  M=~/.cache/huggingface/hub/models--<org>--<repo>
+  SNAP=$(ls -d $M/snapshots/*/ | head -1)
+  find $SNAP -type l -not -path '*/checkpoint-*' -exec readlink -f {} \; | sort -u > /dev/shm/keep
+  find $SNAP -type l     -path '*/checkpoint-*' -exec readlink -f {} \; | sort -u > /dev/shm/ckpt
+  comm -23 /dev/shm/ckpt /dev/shm/keep | xargs -r rm -f    # deletes checkpoint-only blobs
+  rm -rf $SNAP/checkpoint-*                                 # then the (now-dangling) symlink dirs
+  ```
+
+  This keeps the final model intact (its blobs are in `keep`) and is idempotent, so
+  it's safe to re-run if interrupted (e.g. by a `brev stop`).
