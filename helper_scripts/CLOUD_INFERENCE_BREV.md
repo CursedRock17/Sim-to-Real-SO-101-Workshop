@@ -1,236 +1,242 @@
-# Cloud inference on Brev (GPU server ↔ CPU laptop)
+# Cloud inference on Brev: CPU laptop → L4 → SO-101
 
-Run the GR00T N1.6 vials policy on a rented **L4 GPU** in the cloud, and drive the
-real SO-101 from a **CPU-only laptop**. The laptop only sends camera frames + joint
-state and receives actions; all the VLA compute happens in the cloud.
+The laptop reads the arm and two cameras, sends observations through an SSH
+tunnel, and executes returned actions; the L4 runs GR00T N1.6 inference.
+The laptop does not need CUDA, model weights, or Isaac Sim.
 
-```
-┌── laptop (CPU) ──┐   SSH tunnel   ┌── Brev L4 (GPU) ──┐
-│ so101_eval.py     │  localhost:5555 │  run_gr00t_server │
-│ arm + 2 cameras   │ ◀────────────▶  │  Gr00tPolicy      │
-└───────────────────┘   ZMQ actions   └───────────────────┘
-```
+This recipe targets **Linux on an Intel/AMD laptop with Docker**; Windows/WSL
+requires separate USB/camera forwarding, and macOS Docker does not provide
+the Linux device access used below.
 
-- **Model:** `CursedRock17/so101_teleop_vials_sim_and_real_finetune`
-- **Language instruction:** `Pick up vial and place it in the target location`
-- **Cameras the client sends:** `front`, `wrist` (already matches the model)
+| Setting | Value |
+| --- | --- |
+| Brev instance | `isaac-gr00t-n1-6-post-training-e82e7a` |
+| HF repository | `CursedRock17/so101_teleop_vials_sim_and_real_finetune` |
+| Selected model | **`checkpoint-30000`**, the previously tested checkpoint |
+| HF revision | `ed795230464d2785715a5fbb853676522e712e66` |
+| GR00T code revision | `ead52833afbbf4243f8cd5e7664f48a94de03b19` |
+| Language instruction | `Pick up vial and place it in the target location` |
+| Physical camera → model input | `front` → `external_D455`; `wrist` → `ego` |
 
----
+The camera mapping above comes from checkpoint 30000's `processor_config.json`;
+the old guide incorrectly claimed that the model expected `front` and `wrist`.
+Preserve the physical views and robot calibration used for your successful trial.
 
-> **Relation to the GR00T tutorial**
-> ([10-groot](https://docs.nvidia.com/learning/physical-ai/sim-to-real-so-101/latest/10-groot.html#hands-on-run-gr00t-post-training-yourself)):
-> do **step 1** (launch the launchable + `brev shell`), then **skip steps 2–8**
-> (dataset conversion + fine-tuning) — we already have a trained model. This doc
-> is the inference/eval flow, which the tutorial doesn't cover. The launchable
-> below is NVIDIA's tutorial environment (GR00T container + deps), independent of
-> this repo; you bring your code + model into it (steps 2–3).
+## 1. Connect to the existing instance
 
-## 1. Start the GPU instance (choose ONE)
-
-**A. The GR00T launchable (fastest — it ships the GR00T container):**
-Deploy the launchable (this provisions the GPU environment; it is *not* this repo):
-
-    https://brev.nvidia.com/launchable/deploy?launchableID=env-3DfuAZZiLMXlclVQt1ddp0fEsOH
-
-Set the GPU to **L4** and Deploy. Then get a shell:
+On the laptop, install/login to Brev, then:
 
 ```bash
-brev login
-brev ls                       # find the instance name once it's RUNNING
-brev shell <instance>
+brev ls
+brev shell isaac-gr00t-n1-6-post-training-e82e7a
 ```
 
-**B. Manual custom container** (Brev console → **+ New → Container Mode →
-Custom Container**): give it a GR00T image (the one you fine-tuned with, x86_64),
-JupyterLab = No, GPU = **L4**, then Deploy. Confirm the price before deploying.
-
-> The laptop is the thin client, so any x86 GR00T container with the `gr00t`
-> package works on the server. The aarch64 image from `docker/real/` is for the
-> GB10, not a Brev x86 GPU — don't use it here.
-
-## 2. Put the server script on the instance
-
-Run this from a **separate local terminal at your repo root** (not inside the
-`brev shell` from step 1 — `brev copy` is a local command). The launchable's
-SSH user is `ubuntu` and cannot write `/workspace`; copy into the cloned repo,
-which is writable:
+The instance already exists; no new GPU is needed.
+From a separate **local terminal at this repo's root**, copy the server:
 
 ```bash
-brev copy ./helper_scripts/run_gr00t_server.py <instance>:~/Isaac-GR00T/
+brev copy helper_scripts/run_gr00t_server.py isaac-gr00t-n1-6-post-training-e82e7a:~/Isaac-GR00T/
 ```
 
-## 3. Download the final model + start the server (in the instance shell)
+## 2. Fetch only checkpoint 30000's inference files
 
-The launchable env is **uv-managed** (no `source .venv` — `uv run` resolves deps
-on demand). Two hard-won rules: (a) the HF repo carries **every** training
-checkpoint (~215 GB) — fetch only the final model once, then serve **offline** so
-it never re-pulls them; (b) on an **L4** you must drop the `LD_LIBRARY_PATH` compat
-override the startup script sets for an H100 (see troubleshooting: Error 803).
+In the **Brev shell**:
 
 ```bash
 cd ~/Isaac-GR00T
-export PATH=$HOME/.local/bin:$PATH
-
-# --- one-time: download ONLY the final model (skip every checkpoint-*) → ~10 GB ---
-#   (private repo? `huggingface-cli login` or `export HF_TOKEN=hf_xxx` first)
-uv run huggingface-cli download CursedRock17/so101_teleop_vials_sim_and_real_finetune \
-    --exclude "checkpoint-*"
-
-# --- start the server ---
-export HF_HUB_OFFLINE=1        # serve local model only; never re-download checkpoints
-unset LD_LIBRARY_PATH          # L4 CUDA-803 fix (drops the H100/driver-550 compat path)
-nohup uv run python run_gr00t_server.py \
+unset HF_HUB_OFFLINE
+.venv/bin/python run_gr00t_server.py \
     --model-path CursedRock17/so101_teleop_vials_sim_and_real_finetune \
-<<<<<<< HEAD
-    --port 5555 > ~/gr00t_server.log 2>&1 &
-
-sleep 30; tail -n 5 ~/gr00t_server.log     # wait for: serving on tcp://*:5555
-=======
-    --port 5555 \
-    --auto-checkpoint          # picks the latest checkpoint-* if nested, downloading only that one
->>>>>>> refs/remotes/origin/naval_research
+    --checkpoint checkpoint-30000 \
+    --revision ed795230464d2785715a5fbb853676522e712e66 \
+    --download-only
 ```
 
-Do **not** use `run_gr00t_server.py --auto-checkpoint` here — it triggers a full
-`snapshot_download` that re-pulls all 215 GB and fills the disk. The `--exclude`
-download + `HF_HUB_OFFLINE=1` is what keeps the cache at ~10 GB.
+The updated server uses Hugging Face's [filtered downloads](https://huggingface.co/docs/huggingface_hub/guides/download#filter-files-to-download)
+to select `checkpoint-30000/*` and exclude training state (`*.pt`, `*.pth`,
+`*.bin`, trainer state and W&B config).
+The two safetensors shards total **9.81 GB (9.14 GiB)**, plus small config and
+statistics files; this skips the **12.96 GB optimizer** and every other checkpoint.
+Already cached blobs are reused.
 
-## 4. Tunnel the port to the laptop (new laptop terminal)
+`--download-only` prints the local checkpoint directory, which contains
+`config.json`, `processor_config.json`, `statistics.json`, the shard index and
+both weight shards.
+Do not substitute the repository root or `--auto-checkpoint`: those select a
+different model when a final model exists at the root.
+Older copies of the server on Brev also downloaded the whole repository with
+`--auto-checkpoint`, so copy the updated script first.
+
+## 3. Serve that checkpoint on the L4
+
+In the **Brev shell**, first check whether a server is already listening:
 
 ```bash
-brev port-forward <instance> -p 5555:5555
+ss -ltnp | grep ':5555'
 ```
 
-Leave this running. It maps the cloud server to `localhost:5555` over SSH — nothing
-is exposed on the public internet. Equivalent raw-SSH form (after `brev refresh`
-writes the SSH config): `ssh <instance> -L 5555:localhost:5555`.
-
-## 5. Run the robot client (on the machine wired to the arm + cameras)
-
-On the GB10, `helper_scripts/real_basic.sh` already launches the `real-robot`
-container with everything the client needs — `--network=host` (so `localhost:5555`
-is the tunnel), `/dev` passthrough (arm + cameras), `docker/env` (robot vars), and
-`docker/real/scripts` mounted over the in-image eval (so the `--record_video` edits
-are live). Launch it, then run the eval **inside** that shell:
-
-> **Copy-paste warning:** every `\` below must be the last character on its line.
-> If a trailing comment or whitespace ends up after a `\`, bash treats the line
-> continuation as broken and runs each line as its own (invalid) command — that's
-> the source of errors like `docker: invalid reference format` or
-> `bash: --device=/dev/ttyACM0: No such file or directory`. Comments are kept on
-> their own lines above the option they describe for this reason.
+If it is already serving the intended checkpoint, reuse it; otherwise start:
 
 ```bash
-<<<<<<< HEAD
-./helper_scripts/real_basic.sh          # drops you into the container shell
+cd ~/Isaac-GR00T
+unset LD_LIBRARY_PATH
+export HF_HUB_OFFLINE=1
+nohup .venv/bin/python -u run_gr00t_server.py \
+    --model-path CursedRock17/so101_teleop_vials_sim_and_real_finetune \
+    --checkpoint checkpoint-30000 \
+    --revision ed795230464d2785715a5fbb853676522e712e66 \
+    --offline --host 127.0.0.1 --port 5555 \
+    > ~/gr00t_checkpoint_30000.log 2>&1 < /dev/null &
+tail -f ~/gr00t_checkpoint_30000.log
+```
 
-# inside the container:
-source /root/env                        # ROBOT_PORT, ROBOT_ID(=muninn), CAMERA_GRIPPER/EXTERNAL
-cd /Isaac-GR00T
-python3 gr00t/eval/real_robot/SO100/so101_eval.py \
+Wait for `Server is ready and listening on tcp://127.0.0.1:5555`;
+Ctrl-C exits `tail`, while the background server keeps running.
+The existing launchable's `.venv` contains the inference dependencies, so these
+commands use it directly without invoking dependency resolution through `uv run`.
+Unsetting `LD_LIBRARY_PATH` avoids a stale CUDA compatibility override on the L4.
+
+The server binds only to loopback and the laptop reaches it through SSH.
+On a fresh launchable, if offline startup reports missing Eagle tokenizer or
+processor assets, run the same command once without `HF_HUB_OFFLINE=1` and
+`--offline`, let startup complete, then restart offline;
+the explicit checkpoint filter still prevents downloading other training checkpoints.
+
+## 4. Build the CPU client on the laptop
+
+From the repo root on the **laptop**:
+
+```bash
+docker build -t so101-cloud-client:cpu -f docker/real/Dockerfile.cpu .
+```
+
+This image installs CPU PyTorch for LeRobot, the same pinned LeRobot driver
+revision as the GB10 image, and GR00T's pinned client code without its GPU
+dependencies; the image build checks that PyTorch has no CUDA support and that
+the evaluation client imports successfully.
+It needs neither `--gpus` nor NVIDIA Container Toolkit.
+The pinned GR00T package also imports Transformers types when loading
+`PolicyClient`, so the image includes that library without constructing a model.
+
+Copy your existing calibration for this physical follower arm to the laptop's
+`~/.cache/huggingface/lerobot/calibration/` and use the same `ROBOT_ID`;
+the robot calibration file is normally under `robots/so101_follower/`.
+Use your own arm's calibration, not a sample calibration from this repository.
+Stop the previous controller before the laptop takes ownership of the arm.
+
+## 5. Forward the port and check the policy without hardware
+
+In a dedicated **laptop terminal**:
+
+```bash
+brev port-forward isaac-gr00t-n1-6-post-training-e82e7a -p 5555:5555
+```
+
+Leave this running; equivalent SSH forwarding after `brev refresh` is:
+
+```bash
+ssh -N -L 127.0.0.1:5555:127.0.0.1:5555 isaac-gr00t-n1-6-post-training-e82e7a
+```
+
+In another **laptop terminal**:
+
+```bash
+docker run --rm --network=host so101-cloud-client:cpu \
+    --policy_host=127.0.0.1 --policy_port=5555 \
+    --model_front_key=external_D455 --model_wrist_key=ego \
+    --timeout=15 --check_policy=true
+```
+
+This pings the server and checks its saved camera keys without opening the robot
+or cameras; it is a connectivity/configuration check, not a model forward pass.
+Host networking makes the laptop's forwarded port accessible inside the container.
+The client also performs this check before each normal rollout.
+
+## 6. Run a bounded rollout on the laptop
+
+Connect the follower and both cameras, then set your actual device paths and
+calibrated robot ID on the **laptop** (examples below must match your hardware):
+
+```bash
+export ROBOT_PORT=/dev/ttyACM0
+export ROBOT_ID=muninn
+export CAMERA_EXTERNAL=/dev/video0
+export CAMERA_GRIPPER=/dev/video2
+mkdir -p outputs
+
+docker run --rm -it --network=host \
+    --device="$ROBOT_PORT" \
+    --device="$CAMERA_EXTERNAL" --device="$CAMERA_GRIPPER" \
+    -v "$HOME/.cache/huggingface/lerobot/calibration:/root/.cache/huggingface/lerobot/calibration" \
+    -v "$PWD/outputs:/workspace/outputs" \
+    so101-cloud-client:cpu \
     --robot.type=so101_follower \
-    --robot.port=$ROBOT_PORT \
-    --robot.id=$ROBOT_ID \
-    --robot.cameras="{ wrist: {type: opencv, index_or_path: $CAMERA_GRIPPER, width: 640, height: 480, fps: 30}, front: {type: opencv, index_or_path: $CAMERA_EXTERNAL, width: 640, height: 480, fps: 30} }" \
-    --policy_host=localhost --policy_port=5555 \
+    --robot.port="$ROBOT_PORT" --robot.id="$ROBOT_ID" \
+    --robot.cameras="{ wrist: {type: opencv, index_or_path: '$CAMERA_GRIPPER', width: 640, height: 480, fps: 30}, front: {type: opencv, index_or_path: '$CAMERA_EXTERNAL', width: 640, height: 480, fps: 30} }" \
+    --policy_host=127.0.0.1 --policy_port=5555 \
+    --model_front_key=external_D455 --model_wrist_key=ego \
     --lang_instruction="Pick up vial and place it in the target location" \
-    --record_video=true --video_path=/workspace/models/rollout.mp4 --max_steps=300
+    --action_horizon=16 --timeout=60 --max_steps=300 \
+    --record_video=true --video_path=/workspace/outputs/rollout.mp4
 ```
 
-Gotchas that cost time: this image has **no `uv`** — use `python3` directly; the
-eval uses **draccus**, so booleans need a value (`--record_video=true`, not bare);
-`--max_steps` bounds the motion and the mp4 length; the video lands on the host at
-`models/rollout.mp4` (the `models` mount). Why `--network=host`: in a bridged
-container `localhost` is the container's own loopback, not the host where the
-tunnel lands, so the client would never reach the server.
+This command **moves the arm**: the existing controller moves to its configured
+initial pose at connection and its home pose on normal shutdown.
+`--max_steps` bounds policy actions, not those setup/shutdown moves.
+The recorded video appears at `outputs/rollout.mp4` on the laptop.
+Booleans require values (`--record_video=true`), and each continuation `\` must
+be the final character on its line.
 
-> **Note:** the `real-robot` image is aarch64 (built for the GB10). A CPU **laptop**
-> client would need an x86 build, or just the two client deps bare — `lerobot` +
-> `gr00t`'s `PolicyClient` (pure zmq/msgpack/numpy, no CUDA).
-=======
-# --network=host is REQUIRED: inside a bridged container, localhost is the
-# container's own loopback, not the host where the tunnel lands — the client
-# would never reach the server otherwise. Host networking makes localhost:5555
-# the forwarded port.
-# --device=/dev/ttyACM0 is the SO-101 arm (adjust to your port); the two
-# --device flags below it are the cameras.
-docker run --rm -it \
-    --network=host \
-    --device=/dev/ttyACM0 \
-    --device=/dev/video0 --device=/dev/video1 \
-    <real-robot-image> \
-    python3 docker/real/scripts/so101_eval.py \
-        --policy_host=localhost \
-        --policy_port=5555 \
-        --lang_instruction="Pick up vial and place it in the target location"
-```
+The control loop executes up to 16 actions at 30 Hz, then waits for the next
+inference response; network and inference latency add pauses between chunks,
+so this is not a guaranteed continuous 30 Hz cloud control loop.
+It sends raw camera arrays, so upload bandwidth also affects responsiveness.
 
-The client only needs `lerobot` (arm + camera drivers) and `gr00t`'s `PolicyClient`
-(pure zmq/msgpack/numpy — no CUDA, no flash-attn), so no GPU is required.
+For an initial test from the **existing GB10**, use `helper_scripts/real_basic.sh`
+and its existing `python3 gr00t/eval/real_robot/SO100/so101_eval.py` command,
+adding the same policy host/port and the two `--model_*_key` options above;
+the host must run its own SSH tunnel and the container must use host networking.
+The new CPU image is the distributable laptop client; the existing Blackwell
+image remains specific to the GB10 setup.
 
-> **Arch caveat:** the `docker/real/` image is built for the aarch64 GB10. It runs
-> as-is only on an **ARM** laptop; on an x86 laptop you need an x86 build (or run
-> the two client deps — `lerobot` + `PolicyClient` — bare, no container).
->>>>>>> refs/remotes/origin/naval_research
+## Verification performed on 2026-09-17
 
-## 6. Stop (avoid idle charges)
+- Loaded checkpoint 30000 offline on the existing Brev L4 and received valid
+  action arrays of shape `(1, 16, 5)` for the arm and `(1, 16, 1)` for the gripper.
+- Built `so101-cloud-client:cpu` on the instance's x86 CPU; verified
+  `torch==2.7.1+cpu` and `torch.version.cuda is None` without exposing a GPU
+  to the client container.
+- Ran the packaged client's preflight and adapter against the L4 with synthetic
+  camera frames and joint states; received 16 finite decoded robot actions.
+- Confirmed that unavailable servers time out and incorrect camera mappings fail
+  before the client opens hardware.
+- Ran four model-selection regression tests covering filtered downloads,
+  missing checkpoints, offline selection and invalid arguments.
+- Sent a synthetic observation from the development machine through an SSH
+  tunnel to the L4; the measured round trip was approximately 1.23 seconds.
 
-```bash
-# Ctrl-C the server and the port-forward, then:
-brev stop <instance>      # keep it to resume later
-# brev delete <instance>  # tear it down completely
-```
+These checks did not connect to or move a physical robot, and the CPU container
+was tested on the cloud host rather than the destination laptop.
+Latency measurements use synthetic images and are not a guarantee of real-camera
+performance or successful manipulation over the laptop's network connection.
 
----
+## Troubleshooting and stopping
 
-### Sanity check the link before touching the robot
+- **Timeout/refused connection:** verify the server log, loopback listener and
+  laptop tunnel; `--timeout` now sets actual socket send/receive deadlines.
+- **Camera key mismatch:** checkpoint 30000 expects `external_D455` and `ego`;
+  preserve the explicit mapping while keeping physical cameras named `front`/`wrist`.
+- **CUDA error 803:** unset `LD_LIBRARY_PATH` in the server shell and retry;
+  inspect startup scripts for an obsolete `/usr/local/cuda-12.8/compat` override.
+- **Missing cached files:** repeat the filtered download online, then serve offline.
+- **Disk full from an earlier whole-repo download:** inspect the HF cache before
+  deleting anything; this recipe does not delete or alter existing checkpoints.
+- **USB errors:** verify laptop device paths, calibration ID and that no other
+  controller has the same serial port open.
 
-From the laptop, with the tunnel up, a quick ZMQ ping confirms the round-trip:
-
-```python
-from gr00t.policy.server_client import PolicyClient
-print(PolicyClient(host="127.0.0.1", port=5555).ping())  # -> ok
-```
-
-### Troubleshooting
-
-- **`Connection refused` on the client:** the server isn't up yet, or the
-  port-forward terminal died. Confirm step 3 printed `serving on tcp://*:5555`
-  and step 4 is still running.
-- **`CUDA error 803` / `torch.cuda.is_available()` is False (but `nvidia-smi` works):**
-  the startup script pins `LD_LIBRARY_PATH=/usr/local/cuda-12.8/compat` for an
-  **H100 on driver 550**; an **L4 host runs the newer 580 driver**, so that compat
-  path forces an older `libcuda.570` over the native `libcuda.580` → kernel/user
-  driver mismatch (Error 803). `nvidia-smi` (NVML) is unaffected, which is why it
-  still looks fine. Fix: `unset LD_LIBRARY_PATH` before launching, and remove the
-  persisted line so it doesn't return every shell / after a stop-start:
-  ```bash
-  sed -i '/cuda-12.8\/compat/d' ~/.bashrc
-  ```
-- **`Unrecognized model` / missing config.json:** point `--model-path` at the folder
-  that holds `config.json`. For this repo that's the snapshot **root** (the final
-  model), which is what the `--exclude "checkpoint-*"` download in step 3 gives you.
-- **Wrong / jerky actions:** verify `--lang_instruction` matches training exactly
-  and the client is sending `front` + `wrist` in the order the model expects.
-- **`No space left on device` / server core-dumps on launch:** the HF repo ships
-  *every* training checkpoint, so a plain `snapshot_download` (or `--auto-checkpoint`)
-  pulls ~200 GB+ and fills the instance disk — then `uv` can't install deps and the
-  server aborts. Fix: point `--model-path` at the **final model** (the snapshot root
-  has `config.json` + `model-*.safetensors`; that's all inference needs) and, if the
-  disk is already full, delete the checkpoint-only blobs. Because `/tmp` is on the
-  full root disk, write the delete lists to **`/dev/shm`** (RAM), not `/tmp`:
-
-  (On the launchable the cache actually lives at `/ephemeral/cache/huggingface`,
-  symlinked from `~/.cache/huggingface` — either path works below.)
-
-  ```bash
-  M=~/.cache/huggingface/hub/models--<org>--<repo>
-  SNAP=$(ls -d $M/snapshots/*/ | head -1)
-  find $SNAP -type l -not -path '*/checkpoint-*' -exec readlink -f {} \; | sort -u > /dev/shm/keep
-  find $SNAP -type l     -path '*/checkpoint-*' -exec readlink -f {} \; | sort -u > /dev/shm/ckpt
-  comm -23 /dev/shm/ckpt /dev/shm/keep | xargs -r rm -f    # deletes checkpoint-only blobs
-  rm -rf $SNAP/checkpoint-*                                 # then the (now-dangling) symlink dirs
-  ```
-
-  This keeps the final model intact (its blobs are in `keep`) and is idempotent, so
-  it's safe to re-run if interrupted (e.g. by a `brev stop`).
+After a rollout, Ctrl-C the laptop port forward when finished.
+To stop the background policy, identify its PID with
+`pgrep -af run_gr00t_server.py` and terminate that specific process;
+Ctrl-C in the log viewer does not stop a `nohup` server.
+When finished with the GPU session, you can stop the instance with
+`brev stop isaac-gr00t-n1-6-post-training-e82e7a`; retained storage may still incur charges.

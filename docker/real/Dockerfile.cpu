@@ -1,0 +1,37 @@
+FROM python:3.10-slim-bookworm
+
+# Match the server protocol and the existing GB10 robot drivers.
+ARG GROOT_REF=ead52833afbbf4243f8cd5e7664f48a94de03b19
+ARG LEROBOT_REF=e670ac5daf9b76
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git ffmpeg libglib2.0-0 libgl1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Installing from the CPU index first keeps LeRobot's torch requirements on CPU.
+RUN python -m pip install --no-cache-dir --upgrade pip
+RUN python -m pip install --no-cache-dir \
+    torch==2.7.1 torchvision==0.22.1 \
+    --index-url https://download.pytorch.org/whl/cpu
+# LeRobot's Linux input dependency (evdev) builds against kernel headers.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc libc6-dev linux-libc-dev \
+    && rm -rf /var/lib/apt/lists/*
+RUN python -m pip install --no-cache-dir \
+    "lerobot[feetech] @ git+https://github.com/huggingface/lerobot.git@${LEROBOT_REF}" \
+    numpy==2.2.6 opencv-python-headless==4.12.0.88 \
+    matplotlib==3.10.1 msgpack==1.1.0 pyzmq==27.0.1
+
+# Install the protocol code without GR00T's CUDA and flash-attn dependencies.
+RUN python -m pip install --no-cache-dir --no-deps \
+    "gr00t @ git+https://github.com/NVIDIA/Isaac-GR00T.git@${GROOT_REF}"
+# gr00t.policy eagerly imports transformer types even for PolicyClient;
+# importing these types does not construct a model or require a GPU.
+RUN python -m pip install --no-cache-dir transformers==4.51.3
+
+WORKDIR /workspace
+COPY docker/real/scripts/so101_eval.py docker/real/scripts/so101_control.py /workspace/
+RUN python -c "import torch; from gr00t.policy.server_client import PolicyClient; import so101_eval; assert torch.version.cuda is None"
+
+ENV PYTHONUNBUFFERED=1
+ENTRYPOINT ["python", "/workspace/so101_eval.py"]

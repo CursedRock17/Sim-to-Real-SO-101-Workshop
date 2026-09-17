@@ -61,8 +61,11 @@ from lerobot.robots import (  # noqa: F401
 )
 from lerobot.utils.utils import init_logging, log_say
 import numpy as np
+import zmq
 
 from so101_control import SO101Control
+
+logger = logging.getLogger(__name__)
 
 
 def recursive_add_extra_dim(obs: Dict) -> Dict:
@@ -98,7 +101,12 @@ class So100Adapter:
         • Decoding model action chunks into real robot actions
     """
 
-    def __init__(self, policy_client: PolicyClient):
+    def __init__(
+        self,
+        policy_client: PolicyClient,
+        model_front_key: str = "front",
+        model_wrist_key: str = "wrist",
+    ):
         self.policy = policy_client
 
         # SO100 joint ordering used for BOTH training + robot execution
@@ -112,6 +120,9 @@ class So100Adapter:
         ]
 
         self.camera_keys = ["front", "wrist"]
+        self.model_camera_keys = [model_front_key, model_wrist_key]
+        if model_front_key == model_wrist_key:
+            raise ValueError("Front and wrist model camera keys must be distinct")
 
     # -------------------------------------------------------------------------
     # Observation → Model Input
@@ -123,7 +134,10 @@ class So100Adapter:
         model_obs = {}
 
         # (1) Cameras
-        model_obs["video"] = {k: obs[k] for k in self.camera_keys}
+        model_obs["video"] = {
+            model_key: obs[camera_key]
+            for camera_key, model_key in zip(self.camera_keys, self.model_camera_keys)
+        }
 
         # (2) Arm + gripper state
         state = np.array([obs[k] for k in self.robot_state_keys], dtype=np.float32)
@@ -218,6 +232,10 @@ class EvalConfig:
     robot: RobotConfig | None = None
     policy_host: str = "0.0.0.0"
     policy_port: int = 5555
+    model_front_key: str = "front"
+    model_wrist_key: str = "wrist"
+    check_policy: bool = False
+    """Check connectivity and camera mapping, then exit without opening hardware."""
     action_horizon: int = 16
     lang_instruction: str = "Grab markers and place into pen holder."
     play_sounds: bool = False
@@ -268,11 +286,31 @@ def eval(cfg: EvalConfig):
     init_logging()
     logging.info(pformat(asdict(cfg)))
 
+    if cfg.timeout <= 0 or cfg.action_horizon <= 0 or cfg.max_steps < 0:
+        raise ValueError("timeout and action_horizon must be positive; max_steps >= 0")
+    policy_client = PolicyClient(host=cfg.policy_host, port=cfg.policy_port)
+    # This GR00T version accepts timeout_ms but does not set socket deadlines.
+    policy_client.socket.setsockopt(zmq.RCVTIMEO, cfg.timeout * 1000)
+    policy_client.socket.setsockopt(zmq.SNDTIMEO, cfg.timeout * 1000)
+    policy_client.socket.setsockopt(zmq.LINGER, 0)
+    policy = So100Adapter(policy_client, cfg.model_front_key, cfg.model_wrist_key)
+    # Check before connect(): SO101Control.connect() moves to its initial pose.
+    policy_client.call_endpoint("ping", requires_input=False)
+    modalities = policy_client.get_modality_config()
+    expected_cameras = modalities["video"].modality_keys
+    if set(expected_cameras) != set(policy.model_camera_keys):
+        raise ValueError(
+            f"Model cameras {expected_cameras} do not match configured mapping "
+            f"{policy.model_camera_keys}; set --model_front_key and --model_wrist_key"
+        )
+    logger.info("Policy reachable; camera mapping: %s", policy.model_camera_keys)
+    if cfg.check_policy:
+        return
+    if cfg.robot is None:
+        raise ValueError("Set --robot.type, --robot.port, --robot.id and --robot.cameras")
+
     so101_control = SO101Control(cfg)
     so101_control.connect()
-
-    policy_client = PolicyClient(host=cfg.policy_host, port=cfg.policy_port)
-    policy = So100Adapter(policy_client)
 
     joint_keys = policy.robot_state_keys
     obs_buffer: List[Dict[str, float]] = []
