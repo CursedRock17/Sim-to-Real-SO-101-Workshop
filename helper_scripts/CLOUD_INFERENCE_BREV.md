@@ -10,7 +10,8 @@ the Linux device access used below.
 
 | Setting | Value |
 | --- | --- |
-| Brev instance | `isaac-gr00t-n1-6-post-training-e82e7a` |
+| Brev instance | `$BREV_INSTANCE` (set in step 1) |
+| Policy port (server and laptop) | `5556` |
 | HF repository | `CursedRock17/so101_teleop_vials_sim_and_real_finetune` |
 | Selected model | **`checkpoint-30000`**, the previously tested checkpoint |
 | HF revision | `ed795230464d2785715a5fbb853676522e712e66` |
@@ -28,14 +29,20 @@ On the laptop, install/login to Brev, then:
 
 ```bash
 brev ls
-brev shell isaac-gr00t-n1-6-post-training-e82e7a
+export BREV_INSTANCE="isaac-gr00t-n1-6-post-training-e82e7a"
+brev shell "$BREV_INSTANCE"
 ```
+
+Set `BREV_INSTANCE` to the current instance name shown by `brev ls`.
+Repeat the `export BREV_INSTANCE=...` assignment in each new laptop terminal
+that runs Brev or SSH commands; separate terminals do not share exported variables.
+This variable is used locally and does not need to be set inside the Brev shell.
 
 The instance already exists; no new GPU is needed.
 From a separate **local terminal at this repo's root**, copy the server:
 
 ```bash
-brev copy helper_scripts/run_gr00t_server.py isaac-gr00t-n1-6-post-training-e82e7a:~/Isaac-GR00T/
+brev copy helper_scripts/run_gr00t_server.py "${BREV_INSTANCE}:~/Isaac-GR00T/"
 ```
 
 ## 2. Fetch only checkpoint 30000's inference files
@@ -72,7 +79,7 @@ Older copies of the server on Brev also downloaded the whole repository with
 In the **Brev shell**, first check whether a server is already listening:
 
 ```bash
-ss -ltnp | grep ':5555'
+ss -ltnp | grep ':5556'
 ```
 
 If it is already serving the intended checkpoint, reuse it; otherwise start:
@@ -85,12 +92,12 @@ nohup .venv/bin/python -u run_gr00t_server.py \
     --model-path CursedRock17/so101_teleop_vials_sim_and_real_finetune \
     --checkpoint checkpoint-30000 \
     --revision ed795230464d2785715a5fbb853676522e712e66 \
-    --offline --host 127.0.0.1 --port 5555 \
+    --offline --host 127.0.0.1 --port 5556 \
     > ~/gr00t_checkpoint_30000.log 2>&1 < /dev/null &
 tail -f ~/gr00t_checkpoint_30000.log
 ```
 
-Wait for `Server is ready and listening on tcp://127.0.0.1:5555`;
+Wait for `Server is ready and listening on tcp://127.0.0.1:5556`;
 Ctrl-C exits `tail`, while the background server keeps running.
 The existing launchable's `.venv` contains the inference dependencies, so these
 commands use it directly without invoking dependency resolution through `uv run`.
@@ -126,23 +133,23 @@ Stop the previous controller before the laptop takes ownership of the arm.
 
 ## 5. Forward the port and check the policy without hardware
 
-In a dedicated **laptop terminal**:
+In a dedicated **laptop terminal**, set `BREV_INSTANCE` as in step 1, then:
 
 ```bash
-brev port-forward isaac-gr00t-n1-6-post-training-e82e7a -p 5555:5555
+brev port-forward "$BREV_INSTANCE" -p 5556:5556
 ```
 
 Leave this running; equivalent SSH forwarding after `brev refresh` is:
 
 ```bash
-ssh -N -L 127.0.0.1:5555:127.0.0.1:5555 isaac-gr00t-n1-6-post-training-e82e7a
+ssh -N -L 127.0.0.1:5556:127.0.0.1:5556 "$BREV_INSTANCE"
 ```
 
 In another **laptop terminal**:
 
 ```bash
 docker run --rm --network=host so101-cloud-client:cpu \
-    --policy_host=127.0.0.1 --policy_port=5555 \
+    --policy_host=127.0.0.1 --policy_port=5556 \
     --model_front_key=external_D455 --model_wrist_key=ego \
     --timeout=15 --check_policy=true
 ```
@@ -173,7 +180,7 @@ docker run --rm -it --network=host \
     --robot.type=so101_follower \
     --robot.port="$ROBOT_PORT" --robot.id="$ROBOT_ID" \
     --robot.cameras="{ wrist: {type: opencv, index_or_path: '$CAMERA_GRIPPER', width: 640, height: 480, fps: 30}, front: {type: opencv, index_or_path: '$CAMERA_EXTERNAL', width: 640, height: 480, fps: 30} }" \
-    --policy_host=127.0.0.1 --policy_port=5555 \
+    --policy_host=127.0.0.1 --policy_port=5556 \
     --model_front_key=external_D455 --model_wrist_key=ego \
     --lang_instruction="Pick up vial and place it in the target location" \
     --action_horizon=16 --timeout=60 --max_steps=300 \
@@ -239,4 +246,4 @@ To stop the background policy, identify its PID with
 `pgrep -af run_gr00t_server.py` and terminate that specific process;
 Ctrl-C in the log viewer does not stop a `nohup` server.
 When finished with the GPU session, you can stop the instance with
-`brev stop isaac-gr00t-n1-6-post-training-e82e7a`; retained storage may still incur charges.
+`brev stop "$BREV_INSTANCE"`; retained storage may still incur charges.
