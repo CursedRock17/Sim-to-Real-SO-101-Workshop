@@ -56,16 +56,34 @@ class ServerConfig:
 
 def _resolve_model_path(model_path: str, auto_checkpoint: bool) -> str:
     """GR00T needs the folder that holds config.json; some repos nest it under
-    checkpoint-XXXXX. If asked, download the repo and pick the latest checkpoint."""
+    checkpoint-XXXXX. If asked, find the latest checkpoint from the repo's file
+    listing (no download) and fetch only that one — HF repos from training often
+    keep every checkpoint-*, and downloading the whole repo can be 200GB+."""
     if not auto_checkpoint:
         return model_path
-    from huggingface_hub import snapshot_download
+    if not ("/" in model_path and not Path(model_path).exists()):
+        local = Path(model_path)
+        if (local / "config.json").exists():
+            return str(local)
+        ckpts = sorted(local.glob("checkpoint-*"), key=lambda p: int(p.name.split("-")[-1]))
+        return str(ckpts[-1]) if ckpts else str(local)
 
-    local = Path(snapshot_download(model_path)) if "/" in model_path and not Path(model_path).exists() else Path(model_path)
-    if (local / "config.json").exists():
-        return str(local)
-    ckpts = sorted(local.glob("checkpoint-*"), key=lambda p: int(p.name.split("-")[-1]))
-    return str(ckpts[-1]) if ckpts else str(local)
+    from huggingface_hub import list_repo_files, snapshot_download
+
+    files = list_repo_files(model_path)
+    if "config.json" in files:
+        # Final model lives at repo root; skip every checkpoint-*/ subfolder.
+        return str(Path(snapshot_download(model_path, ignore_patterns=["checkpoint-*/*"])))
+
+    ckpt_dirs = sorted(
+        {f.split("/")[0] for f in files if f.startswith("checkpoint-")},
+        key=lambda name: int(name.split("-")[-1]),
+    )
+    if not ckpt_dirs:
+        return str(Path(snapshot_download(model_path)))
+    latest = ckpt_dirs[-1]
+    local = Path(snapshot_download(model_path, allow_patterns=[f"{latest}/*"]))
+    return str(local / latest)
 
 
 def main(cfg: ServerConfig) -> None:
