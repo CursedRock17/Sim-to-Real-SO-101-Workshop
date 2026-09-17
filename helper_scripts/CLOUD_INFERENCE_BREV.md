@@ -81,9 +81,14 @@ export HF_HUB_OFFLINE=1        # serve local model only; never re-download check
 unset LD_LIBRARY_PATH          # L4 CUDA-803 fix (drops the H100/driver-550 compat path)
 nohup uv run python run_gr00t_server.py \
     --model-path CursedRock17/so101_teleop_vials_sim_and_real_finetune \
+<<<<<<< HEAD
     --port 5555 > ~/gr00t_server.log 2>&1 &
 
 sleep 30; tail -n 5 ~/gr00t_server.log     # wait for: serving on tcp://*:5555
+=======
+    --port 5555 \
+    --auto-checkpoint          # picks the latest checkpoint-* if nested, downloading only that one
+>>>>>>> refs/remotes/origin/naval_research
 ```
 
 Do **not** use `run_gr00t_server.py --auto-checkpoint` here — it triggers a full
@@ -108,7 +113,15 @@ is the tunnel), `/dev` passthrough (arm + cameras), `docker/env` (robot vars), a
 `docker/real/scripts` mounted over the in-image eval (so the `--record_video` edits
 are live). Launch it, then run the eval **inside** that shell:
 
+> **Copy-paste warning:** every `\` below must be the last character on its line.
+> If a trailing comment or whitespace ends up after a `\`, bash treats the line
+> continuation as broken and runs each line as its own (invalid) command — that's
+> the source of errors like `docker: invalid reference format` or
+> `bash: --device=/dev/ttyACM0: No such file or directory`. Comments are kept on
+> their own lines above the option they describe for this reason.
+
 ```bash
+<<<<<<< HEAD
 ./helper_scripts/real_basic.sh          # drops you into the container shell
 
 # inside the container:
@@ -134,6 +147,31 @@ tunnel lands, so the client would never reach the server.
 > **Note:** the `real-robot` image is aarch64 (built for the GB10). A CPU **laptop**
 > client would need an x86 build, or just the two client deps bare — `lerobot` +
 > `gr00t`'s `PolicyClient` (pure zmq/msgpack/numpy, no CUDA).
+=======
+# --network=host is REQUIRED: inside a bridged container, localhost is the
+# container's own loopback, not the host where the tunnel lands — the client
+# would never reach the server otherwise. Host networking makes localhost:5555
+# the forwarded port.
+# --device=/dev/ttyACM0 is the SO-101 arm (adjust to your port); the two
+# --device flags below it are the cameras.
+docker run --rm -it \
+    --network=host \
+    --device=/dev/ttyACM0 \
+    --device=/dev/video0 --device=/dev/video1 \
+    <real-robot-image> \
+    python3 docker/real/scripts/so101_eval.py \
+        --policy_host=localhost \
+        --policy_port=5555 \
+        --lang_instruction="Pick up vial and place it in the target location"
+```
+
+The client only needs `lerobot` (arm + camera drivers) and `gr00t`'s `PolicyClient`
+(pure zmq/msgpack/numpy — no CUDA, no flash-attn), so no GPU is required.
+
+> **Arch caveat:** the `docker/real/` image is built for the aarch64 GB10. It runs
+> as-is only on an **ARM** laptop; on an x86 laptop you need an x86 build (or run
+> the two client deps — `lerobot` + `PolicyClient` — bare, no container).
+>>>>>>> refs/remotes/origin/naval_research
 
 ## 6. Stop (avoid idle charges)
 
