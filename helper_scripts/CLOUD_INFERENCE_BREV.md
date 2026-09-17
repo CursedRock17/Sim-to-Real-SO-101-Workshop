@@ -63,7 +63,7 @@ brev copy ./helper_scripts/run_gr00t_server.py <instance>:/workspace/
 python3 /workspace/run_gr00t_server.py \
     --model-path CursedRock17/so101_teleop_vials_sim_and_real_finetune \
     --port 5555 \
-    --auto-checkpoint          # downloads the repo, picks checkpoint-* if nested
+    --auto-checkpoint          # picks the latest checkpoint-* if nested, downloading only that one
 ```
 
 Wait for `serving on tcp://*:5555`. First run downloads the weights (~a few GB).
